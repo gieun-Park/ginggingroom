@@ -47,7 +47,10 @@ export function mapPlacementToCanvas(placement, imageSize, canvasSize) {
     centerY: placement.centerY * imageSize.height * transform.scale + transform.offsetY,
     width: placement.width * imageSize.width * transform.scale,
     height: placement.height * imageSize.height * transform.scale,
-    rotation: placement.rotation
+    rotation: Math.atan2(
+      Math.sin(placement.rotation) * imageSize.height,
+      Math.cos(placement.rotation) * imageSize.width
+    )
   };
 }
 

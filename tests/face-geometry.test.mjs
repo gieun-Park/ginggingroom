@@ -53,6 +53,21 @@ test('maps placements through the same cover transform used by the photo', () =>
   );
 });
 
+test('converts normalized rotation to image-pixel angle for non-square images', () => {
+  const normalizedRotation = Math.PI / 4;
+  const placement = mapPlacementToCanvas(
+    { centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.4, rotation: normalizedRotation },
+    { width: 1000, height: 500 },
+    { width: 400, height: 500 }
+  );
+  const expectedRotation = Math.atan2(
+    Math.sin(normalizedRotation) * 500,
+    Math.cos(normalizedRotation) * 1000
+  );
+
+  assert.ok(Math.abs(placement.rotation - expectedRotation) < 0.001);
+});
+
 test('filters cropped faces and sorts larger faces before smaller faces', () => {
   assert.equal(isPlacementVisible({ centerX: -1, centerY: 20 }, { width: 400, height: 500 }), false);
   assert.equal(isPlacementVisible({ centerX: 20, centerY: 20 }, { width: 400, height: 500 }), true);
