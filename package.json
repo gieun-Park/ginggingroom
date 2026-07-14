@@ -1,0 +1,24 @@
+{
+  "name": "gingging-room",
+  "version": "1.0.0",
+  "description": "깅깅룸 - Cute character photobooth web app with frames",
+  "main": "index.html",
+  "type": "module",
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "dev": "python -m http.server 3000",
+    "test": "node --test",
+    "build": "echo 'Static site - no build needed'",
+    "deploy": "echo 'Configure deployment to your hosting service'"
+  },
+  "keywords": [
+    "photobooth",
+    "photo-frames",
+    "web-app",
+    "canvas"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {},
+  "dependencies": {}
+}

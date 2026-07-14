@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>깅깅룸 - Gingging Room</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍒 깅깅룸</h1>
+            <p>Gingging Room</p>
+        </header>
+
+        <main class="booth">
+            <!-- 왼쪽: 포토 영역 -->
+            <section class="photo-section">
+                <div class="preview-area">
+                    <canvas id="canvas" width="400" height="500"></canvas>
+                </div>
+                <div class="controls">
+                    <label class="upload-btn">
+                        <input type="file" id="photoInput" accept="image/*" hidden>
+                        📸 사진 업로드
+                    </label>
+                    <button id="cameraBtn" class="btn-secondary">📷 카메라</button>
+                </div>
+            </section>
+
+            <!-- 오른쪽: 프레임 선택 -->
+            <section class="frame-section">
+                <h2>프레임 선택</h2>
+                <div class="frame-grid" id="frameGrid">
+                    <!-- 프레임이 JavaScript로 동적 생성됨 -->
+                </div>
+            </section>
+        </main>
+
+        <!-- 결과 화면 -->
+        <section class="result-area" id="resultArea" style="display: none;">
+            <h2>사진이 완성되었습니다!</h2>
+            <div class="result-preview">
+                <img id="resultImage" src="" alt="Result">
+            </div>
+            <div class="result-buttons">
+                <button id="downloadBtn" class="btn-primary">⬇️ 다운로드</button>
+                <button id="resetBtn" class="btn-secondary">🔄 다시하기</button>
+            </div>
+        </section>
+
+        <!-- 숨겨진 비디오 요소 (카메라용) -->
+        <video id="video" style="display: none;"></video>
+    </div>
+
+    <script src="js/frames.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
