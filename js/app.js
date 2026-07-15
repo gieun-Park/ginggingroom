@@ -1,269 +1,313 @@
-// 상태 관리
-const state = {
-    currentPhoto: null,
-    currentFrame: null,
-    selectedFrameId: null
-};
+import { createFaceDetectionService } from './face-detection.js';
+import { isPlacementVisible, mapPlacementToCanvas, sortPlacementsForDrawing } from './face-geometry.js';
+import { drawFrameOverlays, prepareFrameImage } from './frame-overlay.js';
+import { FRAMES, loadedFrames, preloadFrames } from './frames.js';
+import { createPhotoSession } from './photo-session.js';
 
-// DOM 요소
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const photoInput = document.getElementById('photoInput');
-const cameraBtn = document.getElementById('cameraBtn');
-const frameGrid = document.getElementById('frameGrid');
-const resultArea = document.getElementById('resultArea');
-const resultImage = document.getElementById('resultImage');
-const downloadBtn = document.getElementById('downloadBtn');
-const resetBtn = document.getElementById('resetBtn');
-const video = document.getElementById('video');
-
-// 초기화
-function init() {
-    renderFrameGrid();
-    setupEventListeners();
-}
-
-// 프레임 그리드 렌더링
-function renderFrameGrid() {
-    frameGrid.innerHTML = '';
-
-    FRAMES.forEach(frame => {
-        const frameItem = document.createElement('div');
-        frameItem.className = 'frame-item';
-        frameItem.id = frame.id;
-        frameItem.title = frame.name;
-
-        const img = document.createElement('img');
-        img.src = frame.src;
-        img.alt = frame.name;
-
-        frameItem.appendChild(img);
-        frameItem.addEventListener('click', () => selectFrame(frame));
-
-        frameGrid.appendChild(frameItem);
-    });
-}
-
-// 프레임 선택
-function selectFrame(frame) {
-    state.selectedFrameId = frame.id;
-    state.currentFrame = frame;
-
-    // UI 업데이트
-    document.querySelectorAll('.frame-item').forEach(item => {
-        item.classList.remove('active');
-    });
-    document.getElementById(frame.id).classList.add('active');
-
-    renderCanvas();
-}
-
-// 이벤트 리스너 설정
-function setupEventListeners() {
-    photoInput.addEventListener('change', handlePhotoUpload);
-    cameraBtn.addEventListener('click', startCamera);
-    downloadBtn.addEventListener('click', downloadPhoto);
-    resetBtn.addEventListener('click', reset);
-}
-
-// 사진 업로드 처리
-function handlePhotoUpload(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-        const img = new Image();
-        img.onload = function() {
-            state.currentPhoto = img;
-            renderCanvas();
-        };
-        img.src = event.target.result;
+export function createApp({
+    documentRef = document,
+    windowRef = window,
+    detector = createFaceDetectionService(),
+    overlayDrawer = drawFrameOverlays,
+    framePreloader = preloadFrames,
+    frameImages = loadedFrames,
+    framePreparer = prepareFrameImage
+} = {}) {
+    const canvas = documentRef.getElementById('canvas');
+    const context = canvas.getContext('2d');
+    const elements = {
+        photoInput: documentRef.getElementById('photoInput'),
+        cameraBtn: documentRef.getElementById('cameraBtn'),
+        frameGrid: documentRef.getElementById('frameGrid'),
+        resultArea: documentRef.getElementById('resultArea'),
+        resultImage: documentRef.getElementById('resultImage'),
+        downloadBtn: documentRef.getElementById('downloadBtn'),
+        resetBtn: documentRef.getElementById('resetBtn'),
+        video: documentRef.getElementById('video'),
+        faceStatus: documentRef.getElementById('faceStatus'),
+        retryDetectionBtn: documentRef.getElementById('retryDetectionBtn')
     };
-    reader.readAsDataURL(file);
-}
+    const state = { currentPhoto: null, currentFrame: null, selectedFrameId: null };
+    const preparedFrames = new Map();
+    const session = createPhotoSession({
+        detector,
+        onChange(analysis) {
+            const messages = {
+                idle: '',
+                loading: '얼굴 분석 중…',
+                empty: '얼굴을 찾지 못했어요. 정면 사진으로 다시 시도해주세요.',
+                error: '얼굴 인식을 불러오지 못했어요.'
+            };
+            elements.faceStatus.textContent = analysis.status === 'ready'
+                ? (analysis.atLimit
+                    ? '얼굴은 최대 10명까지 적용할 수 있어요.'
+                    : `얼굴을 ${analysis.faces.length}명 찾았어요.`)
+                : messages[analysis.status];
+            elements.retryDetectionBtn.hidden = analysis.status !== 'error';
+            renderCanvas();
+        }
+    });
 
-// 캔버스 렌더링
-function renderCanvas() {
-    // 캔버스 초기화
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    function init() {
+        renderFrameGrid();
+        setupEventListeners();
+        framePreloader(frameId => {
+            if (state.selectedFrameId === frameId) renderCanvas();
+        });
+        initCanvas();
+    }
 
-    // 배경 색상 설정
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    function renderFrameGrid() {
+        elements.frameGrid.innerHTML = '';
 
-    if (state.currentPhoto) {
-        // 사진 그리기 (캔버스 크기에 맞게)
-        const scale = Math.max(
-            canvas.width / state.currentPhoto.width,
-            canvas.height / state.currentPhoto.height
-        );
-        const x = (canvas.width - state.currentPhoto.width * scale) / 2;
-        const y = (canvas.height - state.currentPhoto.height * scale) / 2;
+        FRAMES.forEach(frame => {
+            const frameItem = documentRef.createElement('div');
+            frameItem.className = 'frame-item';
+            frameItem.id = frame.id;
+            frameItem.title = frame.name;
 
-        ctx.drawImage(
+            const image = documentRef.createElement('img');
+            image.src = frame.src;
+            image.alt = frame.name;
+
+            frameItem.appendChild(image);
+            frameItem.addEventListener('click', () => selectFrame(frame, frameItem));
+            elements.frameGrid.appendChild(frameItem);
+        });
+    }
+
+    function selectFrame(frame, frameItem) {
+        state.selectedFrameId = frame.id;
+        state.currentFrame = frame;
+
+        documentRef.querySelectorAll('.frame-item').forEach(item => {
+            item.classList.remove('active');
+        });
+        frameItem.classList.add('active');
+
+        renderCanvas();
+    }
+
+    function setupEventListeners() {
+        elements.photoInput.addEventListener('change', handlePhotoUpload);
+        elements.cameraBtn.addEventListener('click', startCamera);
+        elements.downloadBtn.addEventListener('click', downloadPhoto);
+        elements.resetBtn.addEventListener('click', reset);
+        elements.retryDetectionBtn.addEventListener('click', () => session.retry());
+    }
+
+    function handlePhotoUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new windowRef.FileReader();
+        reader.onload = loadEvent => {
+            const image = new windowRef.Image();
+            image.onload = () => setPhoto(image);
+            image.src = loadEvent.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    async function setPhoto(image) {
+        state.currentPhoto = image;
+        renderCanvas();
+        await session.analyze(image);
+    }
+
+    function renderCanvas() {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        if (!state.currentPhoto) return;
+
+        const imageSize = { width: state.currentPhoto.width, height: state.currentPhoto.height };
+        const canvasSize = { width: canvas.width, height: canvas.height };
+        const scale = Math.max(canvas.width / imageSize.width, canvas.height / imageSize.height);
+        const x = (canvas.width - imageSize.width * scale) / 2;
+        const y = (canvas.height - imageSize.height * scale) / 2;
+        context.drawImage(
             state.currentPhoto,
             x,
             y,
-            state.currentPhoto.width * scale,
-            state.currentPhoto.height * scale
+            imageSize.width * scale,
+            imageSize.height * scale
+        );
+
+        const analysis = session.getState();
+        const frameImage = state.currentFrame && frameImages.get(state.currentFrame.id);
+        if (analysis.status !== 'ready' || !frameImage) return;
+        if (!preparedFrames.has(state.currentFrame.id)) {
+            preparedFrames.set(
+                state.currentFrame.id,
+                framePreparer(frameImage, state.currentFrame)
+            );
+        }
+        const placements = sortPlacementsForDrawing(
+            analysis.faces
+                .map(face => mapPlacementToCanvas(face, imageSize, canvasSize))
+                .filter(face => isPlacementVisible(face, canvasSize))
+        );
+        overlayDrawer(
+            context,
+            preparedFrames.get(state.currentFrame.id),
+            state.currentFrame,
+            placements
         );
     }
 
-    // 프레임 그리기
-    if (state.currentFrame && loadedFrames[state.currentFrame.id]) {
-        const frameImg = loadedFrames[state.currentFrame.id];
-        ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
-    }
-}
+    async function startCamera() {
+        try {
+            const stream = await windowRef.navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user' }
+            });
 
-// 카메라 시작
-async function startCamera() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'user' }
+            elements.video.srcObject = stream;
+            elements.video.play();
+            showCameraUI(stream);
+        } catch (error) {
+            windowRef.alert('카메라에 접근할 수 없습니다. 권한을 확인하세요.');
+            console.error('Camera error:', error);
+        }
+    }
+
+    function showCameraUI(stream) {
+        const modal = documentRef.createElement('div');
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        `;
+
+        const content = documentRef.createElement('div');
+        content.style.cssText = `
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            max-width: 90%;
+        `;
+
+        const videoElement = documentRef.createElement('video');
+        videoElement.srcObject = stream;
+        videoElement.style.cssText = `
+            width: 100%;
+            max-width: 400px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            transform: scaleX(-1);
+        `;
+        videoElement.play();
+
+        const captureBtn = documentRef.createElement('button');
+        captureBtn.textContent = '📸 촬영';
+        captureBtn.style.cssText = `
+            padding: 12px 30px;
+            margin: 10px;
+            font-size: 1em;
+            background: #c41e3a;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        `;
+
+        const closeBtn = documentRef.createElement('button');
+        closeBtn.textContent = '닫기';
+        closeBtn.style.cssText = `
+            padding: 12px 30px;
+            margin: 10px;
+            font-size: 1em;
+            background: #f0f0f0;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        `;
+
+        captureBtn.addEventListener('click', () => {
+            const captureCanvas = documentRef.createElement('canvas');
+            captureCanvas.width = videoElement.videoWidth;
+            captureCanvas.height = videoElement.videoHeight;
+            const captureContext = captureCanvas.getContext('2d');
+            captureContext.scale(-1, 1);
+            captureContext.drawImage(videoElement, -captureCanvas.width, 0);
+
+            const image = new windowRef.Image();
+            image.onload = () => {
+                setPhoto(image);
+                stopCamera(stream, modal);
+            };
+            image.src = captureCanvas.toDataURL();
         });
 
-        video.srcObject = stream;
-        video.play();
+        closeBtn.addEventListener('click', () => stopCamera(stream, modal));
 
-        // 간단한 카메라 UI 표시
-        showCameraUI(stream);
-    } catch (error) {
-        alert('카메라에 접근할 수 없습니다. 권한을 확인하세요.');
-        console.error('Camera error:', error);
+        content.appendChild(videoElement);
+        content.appendChild(captureBtn);
+        content.appendChild(closeBtn);
+        modal.appendChild(content);
+        documentRef.body.appendChild(modal);
     }
-}
 
-// 카메라 UI 표시
-function showCameraUI(stream) {
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.8);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-    `;
-
-    const content = document.createElement('div');
-    content.style.cssText = `
-        background: white;
-        padding: 20px;
-        border-radius: 15px;
-        text-align: center;
-        max-width: 90%;
-    `;
-
-    const videoElement = document.createElement('video');
-    videoElement.srcObject = stream;
-    videoElement.style.cssText = `
-        width: 100%;
-        max-width: 400px;
-        border-radius: 10px;
-        margin-bottom: 15px;
-        transform: scaleX(-1);
-    `;
-    videoElement.play();
-
-    const captureBtn = document.createElement('button');
-    captureBtn.textContent = '📸 촬영';
-    captureBtn.style.cssText = `
-        padding: 12px 30px;
-        margin: 10px;
-        font-size: 1em;
-        background: #c41e3a;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-    `;
-
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '닫기';
-    closeBtn.style.cssText = `
-        padding: 12px 30px;
-        margin: 10px;
-        font-size: 1em;
-        background: #f0f0f0;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-    `;
-
-    captureBtn.addEventListener('click', () => {
-        const canvas2d = document.createElement('canvas');
-        canvas2d.width = videoElement.videoWidth;
-        canvas2d.height = videoElement.videoHeight;
-        const ctx2d = canvas2d.getContext('2d');
-        ctx2d.scale(-1, 1);
-        ctx2d.drawImage(videoElement, -canvas2d.width, 0);
-
-        const img = new Image();
-        img.onload = function() {
-            state.currentPhoto = img;
-            renderCanvas();
-            stream.getTracks().forEach(track => track.stop());
-            document.body.removeChild(modal);
-        };
-        img.src = canvas2d.toDataURL();
-    });
-
-    closeBtn.addEventListener('click', () => {
+    function stopCamera(stream, modal) {
         stream.getTracks().forEach(track => track.stop());
-        document.body.removeChild(modal);
-    });
+        documentRef.body.removeChild(modal);
+    }
 
-    content.appendChild(videoElement);
-    content.appendChild(captureBtn);
-    content.appendChild(closeBtn);
-    modal.appendChild(content);
-    document.body.appendChild(modal);
+    function downloadPhoto() {
+        const link = documentRef.createElement('a');
+        link.href = canvas.toDataURL('image/png');
+        link.download = `gingging-photo-${new Date().getTime()}.png`;
+        link.click();
+    }
+
+    function reset() {
+        state.currentPhoto = null;
+        state.currentFrame = null;
+        state.selectedFrameId = null;
+        session.reset();
+        preparedFrames.clear();
+
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = '#f5f5f5';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        elements.resultArea.style.display = 'none';
+        elements.photoInput.value = '';
+
+        documentRef.querySelectorAll('.frame-item').forEach(item => {
+            item.classList.remove('active');
+        });
+    }
+
+    function initCanvas() {
+        context.fillStyle = '#f5f5f5';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = '#999';
+        context.font = '18px Arial';
+        context.textAlign = 'center';
+        context.fillText(
+            '사진을 업로드하거나 촬영하세요',
+            canvas.width / 2,
+            canvas.height / 2
+        );
+    }
+
+    return {
+        init,
+        setPhoto,
+        renderCanvas,
+        getState: () => ({ ...state, analysis: session.getState() })
+    };
 }
 
-// 사진 다운로드
-function downloadPhoto() {
-    const link = document.createElement('a');
-    link.href = canvas.toDataURL('image/png');
-    link.download = `gingging-photo-${new Date().getTime()}.png`;
-    link.click();
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    window.addEventListener('load', () => createApp().init());
 }
-
-// 초기화
-function reset() {
-    state.currentPhoto = null;
-    state.currentFrame = null;
-    state.selectedFrameId = null;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#f5f5f5';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    resultArea.style.display = 'none';
-    photoInput.value = '';
-
-    document.querySelectorAll('.frame-item').forEach(item => {
-        item.classList.remove('active');
-    });
-}
-
-// 초기 캔버스 상태
-function initCanvas() {
-    ctx.fillStyle = '#f5f5f5';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#999';
-    ctx.font = '18px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('사진을 업로드하거나 촬영하세요', canvas.width / 2, canvas.height / 2);
-}
-
-// 페이지 로드 시 초기화
-window.addEventListener('load', () => {
-    init();
-    initCanvas();
-});

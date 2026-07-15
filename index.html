@@ -19,6 +19,12 @@
                 <div class="preview-area">
                     <canvas id="canvas" width="400" height="500"></canvas>
                 </div>
+                <div class="face-feedback">
+                    <p id="faceStatus" class="face-status" role="status" aria-live="polite"></p>
+                    <button id="retryDetectionBtn" class="btn-secondary retry-detection" type="button" hidden>
+                        다시 시도
+                    </button>
+                </div>
                 <div class="controls">
                     <label class="upload-btn">
                         <input type="file" id="photoInput" accept="image/*" hidden>
@@ -53,7 +59,6 @@
         <video id="video" style="display: none;"></video>
     </div>
 
-    <script src="js/frames.js"></script>
-    <script src="js/app.js"></script>
+    <script type="module" src="js/app.js"></script>
 </body>
 </html>

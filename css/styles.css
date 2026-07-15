@@ -352,3 +352,22 @@ header p {
 .frame-grid::-webkit-scrollbar-thumb:hover {
     background: #a01829;
 }
+
+.face-feedback {
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.face-status {
+    flex: 1;
+    color: #666;
+    font-size: 0.95rem;
+}
+
+.retry-detection {
+    flex: 0 0 auto;
+    min-width: auto;
+    padding: 8px 12px;
+}
