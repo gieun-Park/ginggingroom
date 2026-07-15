@@ -63,7 +63,8 @@ export function createLiveFaceDetectionService({
   modelAssetPath = FACE_MODEL_URL
 } = {}) {
   let detectorPromise = null;
-  let inFlight = null;
+  let generation = 0;
+  let activeDetection = null;
   let latestFaces = [];
 
   async function getDetector() {
@@ -86,22 +87,27 @@ export function createLiveFaceDetectionService({
 
   return {
     async detectFacesForVideo(video, timestamp) {
-      if (inFlight) return latestFaces;
+      const detectionGeneration = generation;
+      if (activeDetection?.generation === detectionGeneration) return latestFaces;
       const detection = (async () => {
         const detector = await getDetector();
-        latestFaces = placementsFromResult(await detector.detectForVideo(video, timestamp));
-        return latestFaces;
+        const faces = placementsFromResult(await detector.detectForVideo(video, timestamp));
+        if (generation === detectionGeneration) latestFaces = faces;
+        return faces;
       })();
-      inFlight = detection;
+      activeDetection = { generation: detectionGeneration, promise: detection };
       try {
         return await detection;
       } finally {
-        if (inFlight === detection) inFlight = null;
+        if (activeDetection?.generation === detectionGeneration && activeDetection.promise === detection) {
+          activeDetection = null;
+        }
       }
     },
     reset() {
+      generation += 1;
       detectorPromise = null;
-      inFlight = null;
+      activeDetection = null;
       latestFaces = [];
     }
   };

@@ -177,3 +177,83 @@ test('does not overlap video inference', async () => {
   resolveDetection({ faceLandmarks: [validLandmarks()] });
   assert.equal((await first).length, 1);
 });
+
+test('does not publish a video result that completes after reset', async () => {
+  let markOldStarted;
+  let markCurrentStarted;
+  const oldStarted = new Promise(resolve => { markOldStarted = resolve; });
+  const currentStarted = new Promise(resolve => { markCurrentStarted = resolve; });
+  const resolvers = [];
+  let calls = 0;
+  const moduleLoader = async () => ({
+    FilesetResolver: { forVisionTasks: async () => 'vision' },
+    FaceLandmarker: {
+      createFromOptions: async () => ({
+        detectForVideo() {
+          calls += 1;
+          if (calls === 1) markOldStarted();
+          else markCurrentStarted();
+          return new Promise(resolve => { resolvers.push(resolve); });
+        }
+      })
+    }
+  });
+  const service = createLiveFaceDetectionService({ moduleLoader });
+
+  const oldDetection = service.detectFacesForVideo({}, 100);
+  await oldStarted;
+  service.reset();
+  const currentDetection = service.detectFacesForVideo({}, 200);
+  await currentStarted;
+
+  resolvers[0]({ faceLandmarks: [validLandmarks()] });
+  await oldDetection;
+  assert.deepEqual(await service.detectFacesForVideo({}, 201), []);
+  assert.equal(calls, 2);
+
+  resolvers[1]({ faceLandmarks: [] });
+  assert.deepEqual(await currentDetection, []);
+});
+
+test('clears a failed VIDEO initialization so retry can succeed', async () => {
+  let attempts = 0;
+  const moduleLoader = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('load failed');
+    return {
+      FilesetResolver: { forVisionTasks: async () => 'vision' },
+      FaceLandmarker: { createFromOptions: async () => ({ detectForVideo: () => ({ faceLandmarks: [] }) }) }
+    };
+  };
+  const service = createLiveFaceDetectionService({ moduleLoader, wasmRoot: '/wasm', modelAssetPath: '/model.task' });
+
+  await assert.rejects(service.detectFacesForVideo({}, 100), /load failed/);
+  assert.deepEqual(await service.detectFacesForVideo({}, 101), []);
+  assert.equal(attempts, 2);
+});
+
+test('an old VIDEO initialization failure cannot clear a newer cached detector after reset', async () => {
+  const attempts = [];
+  const moduleLoader = () => new Promise((resolve, reject) => attempts.push({ resolve, reject }));
+  const moduleValue = {
+    FilesetResolver: { forVisionTasks: async () => 'vision' },
+    FaceLandmarker: {
+      createFromOptions: async () => ({ detectForVideo: () => ({ faceLandmarks: [] }) })
+    }
+  };
+  const service = createLiveFaceDetectionService({ moduleLoader });
+
+  const oldDetection = service.detectFacesForVideo({}, 100);
+  service.reset();
+  const newDetection = service.detectFacesForVideo({}, 200);
+  assert.equal(attempts.length, 2);
+
+  attempts[0].reject(new Error('old load failed'));
+  await assert.rejects(oldDetection, /old load failed/);
+  attempts[1].resolve(moduleValue);
+  assert.deepEqual(await newDetection, []);
+
+  const cachedDetection = service.detectFacesForVideo({}, 201);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(await cachedDetection, []);
+});
