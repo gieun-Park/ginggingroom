@@ -18,8 +18,8 @@
 ### 1. 프레임 이미지 준비
 
 `assets/frames/` 폴더에 프레임 이미지를 저장합니다:
-- `frame-1.png` ~ `frame-15.png`
-- 권장 크기: 400×500px
+- `frame_01.png` ~ `frame_26.png` (총 26개)
+- 권장 크기: 480×480px
 - 권장 형식: PNG (투명도 지원)
 
 ### 2. 로컬에서 실행
@@ -62,18 +62,22 @@ ginggingroom/
 │
 ├── 📁 js/
 │   ├── 📄 app.js              # 메인 애플리케이션 로직
-│   └── 📄 frames.js           # 프레임 데이터 정의
+│   ├── 📄 face-detection.js   # 브라우저 얼굴 감지
+│   ├── 📄 face-geometry.js    # 얼굴 좌표와 캔버스 변환
+│   ├── 📄 frame-config.js     # 프레임 앵커 데이터 정의
+│   ├── 📄 frame-overlay.js    # 다중 얼굴 프레임 합성
+│   ├── 📄 frames.js           # 프레임 이미지 로딩
+│   └── 📄 photo-session.js    # 사진별 얼굴 분석 상태 관리
 │
 ├── 📁 assets/
-│   └── 📁 frames/             # 프레임 이미지 저장소
-│       ├── frame-1.png
-│       ├── frame-2.png
-│       └── ... (15개)
+│   ├── 📁 frames/             # 480×480 프레임 이미지 저장소
+│   │   ├── frame_01.png
+│   │   ├── frame_02.png
+│   │   └── ... frame_26.png (총 26개)
+│   └── 📁 models/
+│       └── face_landmarker.task # 로컬 얼굴 감지 모델
 │
-├── 📁 .github/workflows/
-│   └── 📄 deploy.yml          # GitHub Actions 자동 배포
-│
-└── 📁 src/                    # (선택) 추가 소스 파일
+└── 📁 tests/                  # 자동화 테스트
 ```
 
 ---
