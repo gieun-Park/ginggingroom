@@ -35,17 +35,30 @@ function makeLoadedImage(width, height) {
   return { width, height, naturalWidth: width, naturalHeight: height };
 }
 
-function makeAppHarness({ faces = [], error = null, windowRef = {} } = {}) {
+const DEFAULT_MASK = {
+  width: 1,
+  height: 1,
+  confidence: new Float32Array([1])
+};
+
+function makeAppHarness({
+  faces = [],
+  error = null,
+  backgroundOutcomes = [DEFAULT_MASK],
+  windowRef = {}
+} = {}) {
   const ids = [
     'canvas', 'photoInput', 'cameraBtn', 'frameGrid', 'resultArea',
-    'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn'
+    'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn',
+    'backgroundStatus', 'retryBackgroundBtn'
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
   elements.resultArea.style.display = 'none';
   const photoDraws = [];
+  const renderCalls = [];
   const context = {
     clearRect() {},
-    fillRect() {},
+    fillRect() { renderCalls.push('white'); },
     fillText() {},
     drawImage(...args) { photoDraws.push(args); },
     set fillStyle(value) {},
@@ -71,6 +84,25 @@ function makeAppHarness({ faces = [], error = null, windowRef = {} } = {}) {
     },
     reset() {}
   };
+  const segmenterCalls = [];
+  const segmenterResets = [];
+  const foregroundBuilds = [];
+  const foreground = makeLoadedImage(400, 500);
+  let backgroundAttempt = 0;
+  const backgroundSegmenter = {
+    async segmentPeople(photo) {
+      segmenterCalls.push(photo);
+      const outcome = backgroundOutcomes[
+        Math.min(backgroundAttempt, backgroundOutcomes.length - 1)
+      ];
+      backgroundAttempt += 1;
+      if (outcome instanceof Error) throw outcome;
+      return await outcome;
+    },
+    reset() {
+      segmenterResets.push(true);
+    }
+  };
   const frameImages = new Map(
     FRAMES.slice(0, 2).map(frame => [frame.id, makeLoadedImage(480, 480)])
   );
@@ -79,14 +111,37 @@ function makeAppHarness({ faces = [], error = null, windowRef = {} } = {}) {
     documentRef,
     windowRef: { navigator: {}, addEventListener() {}, ...windowRef },
     detector,
+    backgroundSegmenter,
+    foregroundBuilder(photo, mask) {
+      foregroundBuilds.push({ photo, mask });
+      return foreground;
+    },
+    photoLayerDrawer(contextArg, source) {
+      renderCalls.push(source === foreground ? 'foreground' : 'fallback');
+      contextArg.drawImage(source, 0, 0);
+    },
     frameImages,
     framePreloader: () => {},
     framePreparer: () => ({ width: 480, height: 480 }),
     overlayDrawer(contextArg, prepared, frame, placements) {
-      placements.forEach(placement => drawCalls.push({ kind: 'overlay', frame, placement }));
+      renderCalls.push('overlay');
+      placements.forEach(placement => {
+        drawCalls.push({ kind: 'overlay', frame, placement });
+      });
     }
   });
-  return { app, elements, drawCalls, detectorCalls, photoDraws };
+  return {
+    app,
+    elements,
+    drawCalls,
+    detectorCalls,
+    photoDraws,
+    renderCalls,
+    segmenterCalls,
+    segmenterResets,
+    foregroundBuilds,
+    foreground
+  };
 }
 
 function makeDecodeWindow() {
@@ -279,4 +334,93 @@ test('a photo from another source invalidates a pending upload decode', async ()
   pendingUpload.onload();
 
   assert.equal(app.getState().currentPhoto, cameraPhoto);
+});
+
+test('draws white, cached foreground, then overlays and reuses both analyses on frame changes', async () => {
+  const harness = makeAppHarness({
+    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
+  });
+  harness.app.init();
+  await harness.app.setPhoto(makeLoadedImage(400, 500));
+  harness.elements.frameGrid.children[0].listeners.click();
+
+  harness.renderCalls.length = 0;
+  harness.app.renderCanvas();
+  assert.deepEqual(harness.renderCalls, ['white', 'foreground', 'overlay']);
+  assert.equal(harness.drawCalls.at(-1).kind, 'overlay');
+
+  harness.elements.frameGrid.children[1].listeners.click();
+  assert.equal(harness.detectorCalls.length, 1);
+  assert.equal(harness.segmenterCalls.length, 1);
+  assert.equal(harness.foregroundBuilds.length, 1);
+});
+
+test('keeps the preview white while background segmentation is loading', async () => {
+  let resolveMask;
+  const pendingMask = new Promise(resolve => { resolveMask = resolve; });
+  const controlled = makeAppHarness({ backgroundOutcomes: [pendingMask] });
+  controlled.app.init();
+  const pendingPhoto = controlled.app.setPhoto(makeLoadedImage(400, 500));
+  controlled.renderCalls.length = 0;
+  controlled.app.renderCanvas();
+  assert.deepEqual(controlled.renderCalls, ['white']);
+
+  resolveMask(DEFAULT_MASK);
+  await pendingPhoto;
+});
+
+test('keeps a frame selected before a photo and applies it after both analyses finish', async () => {
+  const harness = makeAppHarness({
+    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
+  });
+  harness.app.init();
+  harness.elements.frameGrid.children[0].listeners.click();
+  await harness.app.setPhoto(makeLoadedImage(400, 500));
+
+  assert.equal(harness.elements.frameGrid.children[0].classList.contains('active'), true);
+  assert.equal(harness.drawCalls.at(-1).kind, 'overlay');
+  assert.equal(harness.detectorCalls.length, 1);
+  assert.equal(harness.segmenterCalls.length, 1);
+});
+
+test('shows original fallback and retries background without redetecting faces', async () => {
+  const harness = makeAppHarness({
+    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }],
+    backgroundOutcomes: [new Error('segment failed'), DEFAULT_MASK]
+  });
+  harness.app.init();
+  await harness.app.setPhoto(makeLoadedImage(400, 500));
+  assert.equal(
+    harness.elements.backgroundStatus.textContent,
+    '배경을 지우지 못했어요. 원본 사진으로 표시합니다.'
+  );
+  assert.equal(harness.elements.retryBackgroundBtn.hidden, false);
+  harness.elements.frameGrid.children[0].listeners.click();
+
+  harness.renderCalls.length = 0;
+  harness.app.renderCanvas();
+  assert.deepEqual(harness.renderCalls, ['white', 'fallback', 'overlay']);
+  await harness.elements.retryBackgroundBtn.listeners.click();
+  assert.equal(harness.elements.backgroundStatus.textContent, '흰색 배경을 적용했어요.');
+  assert.equal(harness.detectorCalls.length, 1);
+  assert.equal(harness.segmenterCalls.length, 2);
+  assert.equal(harness.segmenterResets.length, 1);
+});
+
+test('reset clears background state, status, and cached foreground', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.app.setPhoto(makeLoadedImage(400, 500));
+  harness.elements.resetBtn.listeners.click();
+
+  assert.equal(harness.app.getState().background.status, 'idle');
+  assert.equal(harness.app.getState().background.foreground, null);
+  assert.equal(harness.elements.backgroundStatus.textContent, '');
+  assert.equal(harness.elements.retryBackgroundBtn.hidden, true);
+});
+
+test('exposes independent accessible background status and retry controls', () => {
+  assert.match(indexHtml, /id="backgroundStatus"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(indexHtml, /id="retryBackgroundBtn"[^>]*hidden/);
+  assert.match(indexHtml, />\s*배경 다시 시도\s*</);
 });

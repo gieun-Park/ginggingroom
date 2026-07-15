@@ -1,3 +1,10 @@
+import {
+    createPersonForeground,
+    drawPhotoLayer,
+    fillCanvasWhite
+} from './background-composite.js';
+import { createBackgroundSegmentationService } from './background-segmentation.js';
+import { createBackgroundSession } from './background-session.js';
 import { createFaceDetectionService } from './face-detection.js';
 import { isPlacementVisible, mapPlacementToCanvas, sortPlacementsForDrawing } from './face-geometry.js';
 import { drawFrameOverlays, prepareFrameImage } from './frame-overlay.js';
@@ -8,6 +15,9 @@ export function createApp({
     documentRef = document,
     windowRef = window,
     detector = createFaceDetectionService(),
+    backgroundSegmenter = createBackgroundSegmentationService(),
+    foregroundBuilder = createPersonForeground,
+    photoLayerDrawer = drawPhotoLayer,
     overlayDrawer = drawFrameOverlays,
     framePreloader = preloadFrames,
     frameImages = loadedFrames,
@@ -24,12 +34,14 @@ export function createApp({
         resetBtn: documentRef.getElementById('resetBtn'),
         video: documentRef.getElementById('video'),
         faceStatus: documentRef.getElementById('faceStatus'),
-        retryDetectionBtn: documentRef.getElementById('retryDetectionBtn')
+        retryDetectionBtn: documentRef.getElementById('retryDetectionBtn'),
+        backgroundStatus: documentRef.getElementById('backgroundStatus'),
+        retryBackgroundBtn: documentRef.getElementById('retryBackgroundBtn')
     };
     const state = { currentPhoto: null, currentFrame: null, selectedFrameId: null };
     let uploadRequestGeneration = 0;
     const preparedFrames = new Map();
-    const session = createPhotoSession({
+    const faceSession = createPhotoSession({
         detector,
         onChange(analysis) {
             const messages = {
@@ -44,6 +56,21 @@ export function createApp({
                     : `얼굴을 ${analysis.faces.length}명 찾았어요.`)
                 : messages[analysis.status];
             elements.retryDetectionBtn.hidden = analysis.status !== 'error';
+            renderCanvas();
+        }
+    });
+    const backgroundSession = createBackgroundSession({
+        segmenter: backgroundSegmenter,
+        foregroundBuilder,
+        onChange(background) {
+            const messages = {
+                idle: '',
+                loading: '배경을 흰색으로 정리하는 중…',
+                ready: '흰색 배경을 적용했어요.',
+                error: '배경을 지우지 못했어요. 원본 사진으로 표시합니다.'
+            };
+            elements.backgroundStatus.textContent = messages[background.status];
+            elements.retryBackgroundBtn.hidden = background.status !== 'error';
             renderCanvas();
         }
     });
@@ -93,7 +120,8 @@ export function createApp({
         elements.cameraBtn.addEventListener('click', startCamera);
         elements.downloadBtn.addEventListener('click', downloadPhoto);
         elements.resetBtn.addEventListener('click', reset);
-        elements.retryDetectionBtn.addEventListener('click', () => session.retry());
+        elements.retryDetectionBtn.addEventListener('click', () => faceSession.retry());
+        elements.retryBackgroundBtn.addEventListener('click', () => backgroundSession.retry());
     }
 
     function handlePhotoUpload(event) {
@@ -123,29 +151,31 @@ export function createApp({
         state.currentPhoto = image;
         elements.resultArea.style.display = 'block';
         renderCanvas();
-        await session.analyze(image);
+        await Promise.all([
+            faceSession.analyze(image),
+            backgroundSession.analyze(image)
+        ]);
     }
 
     function renderCanvas() {
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.fillStyle = '#fff';
-        context.fillRect(0, 0, canvas.width, canvas.height);
+        const canvasSize = { width: canvas.width, height: canvas.height };
+        fillCanvasWhite(context, canvasSize);
         if (!state.currentPhoto) return;
 
-        const imageSize = { width: state.currentPhoto.width, height: state.currentPhoto.height };
-        const canvasSize = { width: canvas.width, height: canvas.height };
-        const scale = Math.max(canvas.width / imageSize.width, canvas.height / imageSize.height);
-        const x = (canvas.width - imageSize.width * scale) / 2;
-        const y = (canvas.height - imageSize.height * scale) / 2;
-        context.drawImage(
-            state.currentPhoto,
-            x,
-            y,
-            imageSize.width * scale,
-            imageSize.height * scale
-        );
+        const imageSize = {
+            width: state.currentPhoto.width,
+            height: state.currentPhoto.height
+        };
+        const background = backgroundSession.getState();
+        if (background.status === 'ready') {
+            photoLayerDrawer(context, background.foreground, imageSize, canvasSize);
+        } else if (background.status === 'error') {
+            photoLayerDrawer(context, state.currentPhoto, imageSize, canvasSize);
+        } else {
+            return;
+        }
 
-        const analysis = session.getState();
+        const analysis = faceSession.getState();
         const frameImage = state.currentFrame && frameImages.get(state.currentFrame.id);
         if (analysis.status !== 'ready' || !frameImage) return;
         if (!preparedFrames.has(state.currentFrame.id)) {
@@ -284,7 +314,8 @@ export function createApp({
         state.currentPhoto = null;
         state.currentFrame = null;
         state.selectedFrameId = null;
-        session.reset();
+        faceSession.reset();
+        backgroundSession.reset();
         preparedFrames.clear();
 
         context.clearRect(0, 0, canvas.width, canvas.height);
@@ -316,7 +347,11 @@ export function createApp({
         init,
         setPhoto,
         renderCanvas,
-        getState: () => ({ ...state, analysis: session.getState() })
+        getState: () => ({
+            ...state,
+            analysis: faceSession.getState(),
+            background: backgroundSession.getState()
+        })
     };
 }
 
