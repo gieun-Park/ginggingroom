@@ -111,6 +111,7 @@ export function createApp({
 
     async function setPhoto(image) {
         state.currentPhoto = image;
+        elements.resultArea.style.display = 'block';
         renderCanvas();
         await session.analyze(image);
     }

@@ -35,6 +35,7 @@ function makeAppHarness({ faces = [], error = null } = {}) {
     'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn'
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
+  elements.resultArea.style.display = 'none';
   const photoDraws = [];
   const context = {
     clearRect() {},
@@ -102,8 +103,30 @@ test('keeps the photo visible and shows retry when detection fails', async () =>
   app.init();
   await app.setPhoto(makeLoadedImage(400, 500));
   assert.ok(photoDraws.length > 0);
+  assert.equal(elements.resultArea.style.display, 'block');
   assert.equal(elements.faceStatus.textContent, '얼굴 인식을 불러오지 못했어요.');
   assert.equal(elements.retryDetectionBtn.hidden, false);
+});
+
+test('shows result controls for a retained photo and hides them on reset', async () => {
+  const { app, elements } = makeAppHarness({
+    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
+  });
+  app.init();
+  assert.equal(elements.resultArea.style.display, 'none');
+
+  await app.setPhoto(makeLoadedImage(400, 500));
+  assert.equal(elements.resultArea.style.display, 'block');
+
+  elements.resetBtn.listeners.click();
+  assert.equal(elements.resultArea.style.display, 'none');
+});
+
+test('keeps result controls available when no face is found', async () => {
+  const { app, elements } = makeAppHarness({ faces: [] });
+  app.init();
+  await app.setPhoto(makeLoadedImage(400, 500));
+  assert.equal(elements.resultArea.style.display, 'block');
 });
 
 test('reset clears the cached analysis and status', async () => {
