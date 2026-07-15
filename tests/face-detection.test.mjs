@@ -6,7 +6,8 @@ import {
   MEDIAPIPE_MODULE_URL,
   MEDIAPIPE_VERSION,
   MEDIAPIPE_WASM_ROOT,
-  createFaceDetectionService
+  createFaceDetectionService,
+  createLiveFaceDetectionService
 } from '../js/face-detection.js';
 
 function validLandmarks() {
@@ -132,4 +133,47 @@ test('an old initialization failure cannot clear a newer cached detector after r
   const cachedDetection = service.detectFaces({ id: 'cached' });
   assert.equal(attempts.length, 2);
   assert.deepEqual(await cachedDetection, []);
+});
+
+test('creates a VIDEO landmarker and converts detectForVideo results', async () => {
+  const optionsSeen = [];
+  const moduleLoader = async () => ({
+    FilesetResolver: { forVisionTasks: async () => 'vision' },
+    FaceLandmarker: {
+      createFromOptions: async (vision, options) => {
+        optionsSeen.push(options);
+        return { detectForVideo: () => ({ faceLandmarks: [validLandmarks()] }) };
+      }
+    }
+  });
+  const service = createLiveFaceDetectionService({ moduleLoader, wasmRoot: '/wasm', modelAssetPath: '/model' });
+  assert.equal((await service.detectFacesForVideo({}, 123)).length, 1);
+  assert.equal(optionsSeen[0].runningMode, 'VIDEO');
+  assert.equal(optionsSeen[0].numFaces, 10);
+});
+
+test('does not overlap video inference', async () => {
+  let resolveDetection;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  let calls = 0;
+  const moduleLoader = async () => ({
+    FilesetResolver: { forVisionTasks: async () => 'vision' },
+    FaceLandmarker: {
+      createFromOptions: async () => ({
+        detectForVideo() {
+          calls += 1;
+          markStarted();
+          return new Promise(resolve => { resolveDetection = resolve; });
+        }
+      })
+    }
+  });
+  const service = createLiveFaceDetectionService({ moduleLoader });
+  const first = service.detectFacesForVideo({}, 100);
+  await started;
+  assert.deepEqual(await service.detectFacesForVideo({}, 101), []);
+  assert.equal(calls, 1);
+  resolveDetection({ faceLandmarks: [validLandmarks()] });
+  assert.equal((await first).length, 1);
 });
