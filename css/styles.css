@@ -41,7 +41,7 @@ header p {
 /* ===== 메인 부스 영역 ===== */
 .booth {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr);
     gap: 30px;
     margin-bottom: 40px;
     animation: fadeIn 0.8s ease-out;
@@ -50,6 +50,9 @@ header p {
 /* 포토 섹션 */
 .photo-section {
     min-width: 0;
+    position: sticky;
+    top: 20px;
+    align-self: start;
     background: white;
     border-radius: 15px;
     padding: 25px;
@@ -67,13 +70,15 @@ header p {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 400px;
+    min-height: 0;
+    aspect-ratio: 4 / 5;
 }
 
 #canvas {
-    max-width: 100%;
-    max-height: 100%;
     display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4 / 5;
 }
 
 .controls {
@@ -107,7 +112,7 @@ header p {
     align-content: start;
     gap: 15px;
     width: 100%;
-    max-height: 500px;
+    max-height: min(750px, calc(100vh - 220px));
     overflow-y: auto;
     overflow-x: hidden;
     padding-right: 10px;
@@ -238,12 +243,18 @@ header p {
         gap: 20px;
     }
 
+    .photo-section {
+        position: static;
+        top: auto;
+    }
+
     header h1 {
         font-size: 2em;
     }
 
     .frame-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+        max-height: 500px;
     }
 
     .controls {
@@ -260,14 +271,12 @@ header p {
         flex-direction: column;
     }
 
-    #canvas {
-        max-width: 100%;
-    }
 }
 
 @media (max-width: 480px) {
     .frame-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-x: hidden;
         gap: 10px;
     }
 
@@ -336,20 +345,23 @@ header p {
     background: #a01829;
 }
 
-.face-feedback {
+.face-feedback,
+.background-feedback {
     min-height: 24px;
     display: flex;
     align-items: center;
     gap: 10px;
 }
 
-.face-status {
+.face-status,
+.background-status {
     flex: 1;
     color: #666;
     font-size: 0.95rem;
 }
 
-.retry-detection {
+.retry-detection,
+.retry-background {
     flex: 0 0 auto;
     min-width: auto;
     padding: 8px 12px;
