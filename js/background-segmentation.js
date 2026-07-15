@@ -44,7 +44,7 @@ export function createBackgroundSegmentationService({
       const result = segmenter.segment(image);
       const confidenceMasks = result.confidenceMasks ?? [];
       try {
-        const personMask = confidenceMasks[1];
+        const personMask = confidenceMasks[confidenceMasks.length - 1];
         if (!personMask) throw new Error('Person confidence mask is unavailable.');
         return {
           width: personMask.width,

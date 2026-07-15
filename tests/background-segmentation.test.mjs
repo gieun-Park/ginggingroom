@@ -16,12 +16,22 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function makeRuntime({ floatData = new Float32Array([0, 0.25, 0.75, 1]) } = {}) {
-  const calls = { wasmRoot: null, options: null, segments: 0, closes: [0, 0] };
-  const masks = [0, 1].map(index => ({
+function makeRuntime({
+  floatData = new Float32Array([0, 0.25, 0.75, 1]),
+  confidenceMaskCount = 2
+} = {}) {
+  const calls = {
+    wasmRoot: null,
+    options: null,
+    segments: 0,
+    closes: Array(confidenceMaskCount).fill(0)
+  };
+  const masks = Array.from({ length: confidenceMaskCount }, (_, index) => ({
     width: 2,
     height: 2,
-    getAsFloat32Array: () => index === 1 ? floatData : new Float32Array(4),
+    getAsFloat32Array: () => index === confidenceMaskCount - 1
+      ? floatData
+      : new Float32Array(4),
     close: () => { calls.closes[index] += 1; }
   }));
   const segmenter = {
@@ -81,6 +91,21 @@ test('copies the person mask and closes every MediaPipe confidence mask', async 
     confidence: new Float32Array([0, 0.25, 0.75, 1])
   });
   assert.deepEqual(calls.closes, [1, 1]);
+});
+
+test('copies and closes a sole person confidence mask', async () => {
+  const floatData = new Float32Array([0, 0.25, 0.75, 1]);
+  const { calls, runtime } = makeRuntime({ floatData, confidenceMaskCount: 1 });
+  const service = createBackgroundSegmentationService({ moduleLoader: async () => runtime });
+  const mask = await service.segmentPeople({ id: 'photo' });
+
+  floatData[1] = 0.9;
+  assert.deepEqual(mask, {
+    width: 2,
+    height: 2,
+    confidence: new Float32Array([0, 0.25, 0.75, 1])
+  });
+  assert.deepEqual(calls.closes, [1]);
 });
 
 test('a rejected old initialization cannot clear a newer initialization', async () => {
