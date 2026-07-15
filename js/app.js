@@ -56,6 +56,7 @@ export function createApp({
                     : `얼굴을 ${analysis.faces.length}명 찾았어요.`)
                 : messages[analysis.status];
             elements.retryDetectionBtn.hidden = analysis.status !== 'error';
+            updateDownloadAvailability();
             renderCanvas();
         }
     });
@@ -71,11 +72,13 @@ export function createApp({
             };
             elements.backgroundStatus.textContent = messages[background.status];
             elements.retryBackgroundBtn.hidden = background.status !== 'error';
+            updateDownloadAvailability();
             renderCanvas();
         }
     });
 
     function init() {
+        updateDownloadAvailability();
         renderFrameGrid();
         setupEventListeners();
         framePreloader(frameId => {
@@ -149,6 +152,7 @@ export function createApp({
 
     async function commitPhoto(image) {
         state.currentPhoto = image;
+        updateDownloadAvailability();
         elements.resultArea.style.display = 'block';
         renderCanvas();
         await Promise.all([
@@ -303,10 +307,25 @@ export function createApp({
     }
 
     function downloadPhoto() {
+        if (elements.downloadBtn.disabled) return;
         const link = documentRef.createElement('a');
         link.href = canvas.toDataURL('image/png');
         link.download = `gingging-photo-${new Date().getTime()}.png`;
         link.click();
+    }
+
+    function updateDownloadAvailability() {
+        const analysis = faceSession.getState();
+        const background = backgroundSession.getState();
+        const faceSettled = ['ready', 'empty', 'error'].includes(analysis.status);
+        const backgroundSettled = ['ready', 'error'].includes(background.status);
+        elements.downloadBtn.disabled = !(
+            state.currentPhoto
+            && analysis.photo === state.currentPhoto
+            && background.photo === state.currentPhoto
+            && faceSettled
+            && backgroundSettled
+        );
     }
 
     function reset() {

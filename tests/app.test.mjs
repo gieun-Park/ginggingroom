@@ -27,6 +27,7 @@ class Element {
 
   appendChild(child) { this.children.push(child); }
   addEventListener(type, handler) { this.listeners[type] = handler; }
+  click() { this.clickCount = (this.clickCount ?? 0) + 1; }
   set innerHTML(value) { if (value === '') this.children = []; }
   get innerHTML() { return ''; }
 }
@@ -68,10 +69,17 @@ function makeAppHarness({
   elements.canvas.width = 400;
   elements.canvas.height = 500;
   elements.canvas.getContext = () => context;
+  elements.canvas.toDataURL = () => 'data:image/png;base64,PHOTO';
 
+  const createdElements = [];
   const documentRef = {
     getElementById: id => elements[id],
-    createElement: () => new Element(),
+    createElement: tagName => {
+      const element = new Element();
+      element.tagName = tagName;
+      createdElements.push(element);
+      return element;
+    },
     querySelectorAll: selector => selector === '.frame-item' ? elements.frameGrid.children : [],
     body: new Element('body')
   };
@@ -140,7 +148,8 @@ function makeAppHarness({
     segmenterCalls,
     segmenterResets,
     foregroundBuilds,
-    foreground
+    foreground,
+    createdElements
   };
 }
 
@@ -227,6 +236,81 @@ test('shows result controls for a retained photo and hides them on reset', async
 
   elements.resetBtn.listeners.click();
   assert.equal(elements.resultArea.style.display, 'none');
+});
+
+test('keeps download disabled until both photo analyses settle', async () => {
+  let resolveFaces;
+  let resolveMask;
+  const pendingFaces = new Promise(resolve => { resolveFaces = resolve; });
+  const pendingMask = new Promise(resolve => { resolveMask = resolve; });
+  const { app, elements } = makeAppHarness({
+    faces: pendingFaces,
+    backgroundOutcomes: [pendingMask]
+  });
+  app.init();
+
+  const pendingPhoto = app.setPhoto(makeLoadedImage(400, 500));
+  assert.equal(elements.downloadBtn.disabled, true);
+
+  resolveFaces([]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.getState().analysis.status, 'empty');
+  assert.equal(elements.downloadBtn.disabled, true);
+
+  resolveMask(DEFAULT_MASK);
+  await pendingPhoto;
+  assert.equal(elements.downloadBtn.disabled, false);
+});
+
+test('disables download again for a new photo and reset', async () => {
+  let resolveSecondMask;
+  const secondMask = new Promise(resolve => { resolveSecondMask = resolve; });
+  const { app, elements } = makeAppHarness({
+    faces: [],
+    backgroundOutcomes: [DEFAULT_MASK, secondMask]
+  });
+  app.init();
+  assert.equal(elements.downloadBtn.disabled, true);
+
+  await app.setPhoto(makeLoadedImage(400, 500));
+  assert.equal(elements.downloadBtn.disabled, false);
+
+  const secondPhoto = app.setPhoto(makeLoadedImage(600, 800));
+  assert.equal(elements.downloadBtn.disabled, true);
+  resolveSecondMask(DEFAULT_MASK);
+  await secondPhoto;
+  assert.equal(elements.downloadBtn.disabled, false);
+
+  elements.resetBtn.listeners.click();
+  assert.equal(elements.downloadBtn.disabled, true);
+});
+
+test('disables download while a failed background analysis is retried', async () => {
+  let resolveRetryMask;
+  const retryMask = new Promise(resolve => { resolveRetryMask = resolve; });
+  const { app, elements } = makeAppHarness({
+    faces: [],
+    backgroundOutcomes: [new Error('segment failed'), retryMask]
+  });
+  app.init();
+  await app.setPhoto(makeLoadedImage(400, 500));
+  assert.equal(elements.downloadBtn.disabled, false);
+
+  const retry = elements.retryBackgroundBtn.listeners.click();
+  assert.equal(elements.downloadBtn.disabled, true);
+  resolveRetryMask(DEFAULT_MASK);
+  await retry;
+  assert.equal(elements.downloadBtn.disabled, false);
+});
+
+test('ignores programmatic download clicks while processing is incomplete', () => {
+  const { app, elements, createdElements } = makeAppHarness();
+  app.init();
+  const createdBeforeClick = createdElements.length;
+
+  elements.downloadBtn.listeners.click();
+
+  assert.equal(createdElements.length, createdBeforeClick);
 });
 
 test('keeps result controls available when no face is found', async () => {
