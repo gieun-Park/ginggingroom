@@ -27,6 +27,7 @@ export function createApp({
         retryDetectionBtn: documentRef.getElementById('retryDetectionBtn')
     };
     const state = { currentPhoto: null, currentFrame: null, selectedFrameId: null };
+    let uploadRequestGeneration = 0;
     const preparedFrames = new Map();
     const session = createPhotoSession({
         detector,
@@ -96,19 +97,29 @@ export function createApp({
     }
 
     function handlePhotoUpload(event) {
+        const requestGeneration = ++uploadRequestGeneration;
         const file = event.target.files[0];
         if (!file) return;
 
         const reader = new windowRef.FileReader();
         reader.onload = loadEvent => {
+            if (requestGeneration !== uploadRequestGeneration) return;
             const image = new windowRef.Image();
-            image.onload = () => setPhoto(image);
+            image.onload = () => {
+                if (requestGeneration !== uploadRequestGeneration) return;
+                commitPhoto(image);
+            };
             image.src = loadEvent.target.result;
         };
         reader.readAsDataURL(file);
     }
 
     async function setPhoto(image) {
+        uploadRequestGeneration += 1;
+        return commitPhoto(image);
+    }
+
+    async function commitPhoto(image) {
         state.currentPhoto = image;
         elements.resultArea.style.display = 'block';
         renderCanvas();
@@ -269,6 +280,7 @@ export function createApp({
     }
 
     function reset() {
+        uploadRequestGeneration += 1;
         state.currentPhoto = null;
         state.currentFrame = null;
         state.selectedFrameId = null;

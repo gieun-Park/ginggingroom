@@ -35,7 +35,7 @@ function makeLoadedImage(width, height) {
   return { width, height, naturalWidth: width, naturalHeight: height };
 }
 
-function makeAppHarness({ faces = [], error = null } = {}) {
+function makeAppHarness({ faces = [], error = null, windowRef = {} } = {}) {
   const ids = [
     'canvas', 'photoInput', 'cameraBtn', 'frameGrid', 'resultArea',
     'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn'
@@ -77,7 +77,7 @@ function makeAppHarness({ faces = [], error = null } = {}) {
   const drawCalls = [];
   const app = createApp({
     documentRef,
-    windowRef: { navigator: {}, addEventListener() {} },
+    windowRef: { navigator: {}, addEventListener() {}, ...windowRef },
     detector,
     frameImages,
     framePreloader: () => {},
@@ -87,6 +87,38 @@ function makeAppHarness({ faces = [], error = null } = {}) {
     }
   });
   return { app, elements, drawCalls, detectorCalls, photoDraws };
+}
+
+function makeDecodeWindow() {
+  const readers = [];
+  const images = [];
+
+  class ControlledFileReader {
+    constructor() {
+      readers.push(this);
+    }
+
+    readAsDataURL(file) {
+      this.file = file;
+    }
+  }
+
+  class ControlledImage {
+    constructor() {
+      this.width = 640;
+      this.height = 480;
+      this.naturalWidth = 640;
+      this.naturalHeight = 480;
+      images.push(this);
+    }
+  }
+
+  return { FileReader: ControlledFileReader, Image: ControlledImage, readers, images };
+}
+
+function selectUpload(elements, file) {
+  elements.photoInput.files = file ? [file] : [];
+  elements.photoInput.listeners.change({ target: elements.photoInput });
 }
 
 test('uses neutral copy for the retained-photo action area', () => {
@@ -156,4 +188,95 @@ test('reset clears the cached analysis and status', async () => {
   elements.resetBtn.listeners.click();
   assert.equal(elements.faceStatus.textContent, '');
   assert.equal(app.getState().currentPhoto, null);
+});
+
+test('keeps the newest upload when image decodes finish out of order', () => {
+  const decodeWindow = makeDecodeWindow();
+  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
+  app.init();
+
+  selectUpload(elements, { name: 'a.png' });
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
+  const imageA = decodeWindow.images[0];
+
+  selectUpload(elements, { name: 'b.png' });
+  decodeWindow.readers[1].onload({ target: { result: 'data:image/png;base64,B' } });
+  const imageB = decodeWindow.images[1];
+
+  imageB.onload();
+  imageA.onload();
+
+  assert.equal(app.getState().currentPhoto, imageB);
+});
+
+test('ignores an older upload whose file read finishes after a new selection', () => {
+  const decodeWindow = makeDecodeWindow();
+  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
+  app.init();
+
+  selectUpload(elements, { name: 'a.png' });
+  selectUpload(elements, { name: 'b.png' });
+  decodeWindow.readers[1].onload({ target: { result: 'data:image/png;base64,B' } });
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
+
+  assert.equal(decodeWindow.images.length, 1);
+  decodeWindow.images[0].onload();
+  assert.equal(app.getState().currentPhoto, decodeWindow.images[0]);
+});
+
+test('reset prevents a pending image decode from restoring the photo', () => {
+  const decodeWindow = makeDecodeWindow();
+  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
+  app.init();
+
+  selectUpload(elements, { name: 'a.png' });
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
+  const imageA = decodeWindow.images[0];
+  elements.resetBtn.listeners.click();
+  imageA.onload();
+
+  assert.equal(app.getState().currentPhoto, null);
+  assert.equal(elements.resultArea.style.display, 'none');
+});
+
+test('reset prevents a pending file read from starting image decode', () => {
+  const decodeWindow = makeDecodeWindow();
+  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
+  app.init();
+
+  selectUpload(elements, { name: 'a.png' });
+  elements.resetBtn.listeners.click();
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
+
+  assert.equal(decodeWindow.images.length, 0);
+  assert.equal(app.getState().currentPhoto, null);
+});
+
+test('an empty upload selection invalidates an older pending file read', () => {
+  const decodeWindow = makeDecodeWindow();
+  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
+  app.init();
+
+  selectUpload(elements, { name: 'a.png' });
+  selectUpload(elements, null);
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
+
+  assert.equal(decodeWindow.images.length, 0);
+  assert.equal(app.getState().currentPhoto, null);
+});
+
+test('a photo from another source invalidates a pending upload decode', async () => {
+  const decodeWindow = makeDecodeWindow();
+  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
+  app.init();
+
+  selectUpload(elements, { name: 'upload.png' });
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,UPLOAD' } });
+  const pendingUpload = decodeWindow.images[0];
+  const cameraPhoto = makeLoadedImage(800, 600);
+
+  await app.setPhoto(cameraPhoto);
+  pendingUpload.onload();
+
+  assert.equal(app.getState().currentPhoto, cameraPhoto);
 });
