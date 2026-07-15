@@ -1,76 +1,22 @@
-// 프레임 커스터마이징 가이드
-// 이 파일은 프레임의 위치와 크기를 세밀하게 조정할 때 사용합니다
+# 프레임 커스터마이징 가이드
 
-/*
-프레임 객체 속성:
-- id: 고유 식별자 (필수)
-- name: 프레임 표시 이름
-- src: 이미지 파일 경로 (필수)
-- offsetX: X 좌표 오프셋 (픽셀)
-- offsetY: Y 좌표 오프셋 (픽셀)
-- width: 프레임 너비 (픽셀)
-- height: 프레임 높이 (픽셀)
+프레임의 얼굴 정렬 위치와 투명 마스크를 조정할 때 `js/frames.js`의 프레임 객체를 다음 형식으로 설정합니다.
 
-예시:
+```js
 {
-    id: 'frame-1',
-    name: '분홍 원피스',
-    src: 'assets/frames/frame-1.png',
-    offsetX: 0,      // 왼쪽에서의 거리
-    offsetY: 0,      // 위에서의 거리
-    width: 400,      // 캔버스 너비와 동일
-    height: 500      // 캔버스 높이와 동일
+  id: 'frame-1',
+  name: '프레임 1',
+  src: 'assets/frames/frame_01.png',
+  faceAnchor: { centerX: 0.499, centerY: 0.472, width: 0.248, height: 0.177 },
+  maskAnchors: [
+    { centerX: 0.499, centerY: 0.472, width: 0.248, height: 0.177 }
+  ],
+  fitPadding: 1.08
 }
-*/
+```
 
-// 프레임 크기 정보
-// 기본 캔버스 크기: 400 x 500px
+모든 좌표와 크기 값은 480×480 원본 프레임 이미지를 기준으로 0부터 1 사이로 정규화됩니다.
 
-// 프레임 위치 조정 팁:
-// 1. offsetX: 음수면 왼쪽, 양수면 오른쪽
-// 2. offsetY: 음수면 위쪽, 양수면 아래쪽
-// 3. width/height: 프레임 크기 조정
-
-// 예: 작은 프레임
-const smallFrame = {
-    id: 'frame-small',
-    name: '작은 프레임',
-    src: 'assets/frames/small.png',
-    offsetX: 50,     // 왼쪽에서 50px
-    offsetY: 50,     // 위에서 50px
-    width: 300,      // 너비 300px
-    height: 400      // 높이 400px
-};
-
-// 예: 대형 프레임 (여백 있음)
-const largeFrame = {
-    id: 'frame-large',
-    name: '대형 프레임',
-    src: 'assets/frames/large.png',
-    offsetX: -50,    // 왼쪽으로 50px 확장
-    offsetY: -50,    // 위로 50px 확장
-    width: 500,      // 너비 500px (캔버스 초과)
-    height: 600      // 높이 600px (캔버스 초과)
-};
-
-// 프레임 정렬 가이드
-//
-// 왼쪽 정렬:
-// offsetX: 0
-//
-// 중앙 정렬:
-// offsetX: (400 - frameWidth) / 2
-//
-// 오른쪽 정렬:
-// offsetX: 400 - frameWidth
-
-// 예: 중앙 정렬된 프레임 (width: 350)
-const centeredFrame = {
-    id: 'frame-centered',
-    name: '중앙 정렬 프레임',
-    src: 'assets/frames/centered.png',
-    offsetX: 25,     // (400 - 350) / 2 = 25
-    offsetY: 0,
-    width: 350,
-    height: 500
-};
+- `faceAnchor`는 감지된 얼굴과 프레임을 맞추는 기준 위치와 크기를 제어합니다.
+- `maskAnchors`의 모든 영역은 투명하게 지워집니다. 프레임에 얼굴 구멍이 여러 개라면 각 영역을 배열에 추가합니다.
+- `fitPadding`은 감지된 얼굴 주변에 여유 공간을 더합니다. 값이 클수록 얼굴 주위의 여백이 늘어납니다.
