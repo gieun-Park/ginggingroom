@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createApp } from '../js/app.js';
 import { FRAMES } from '../js/frame-config.js';
+
+const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+const stylesSource = readFileSync(new URL('../css/styles.css', import.meta.url), 'utf8');
+const resultAreaMarkup = indexHtml.match(/<section class="result-area"[\s\S]*?<\/section>/)?.[0] ?? '';
 
 class Element {
   constructor(id = '') {
@@ -31,7 +37,7 @@ function makeLoadedImage(width, height) {
 
 function makeAppHarness({ faces = [], error = null } = {}) {
   const ids = [
-    'canvas', 'photoInput', 'cameraBtn', 'frameGrid', 'resultArea', 'resultImage',
+    'canvas', 'photoInput', 'cameraBtn', 'frameGrid', 'resultArea',
     'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn'
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
@@ -82,6 +88,20 @@ function makeAppHarness({ faces = [], error = null } = {}) {
   });
   return { app, elements, drawCalls, detectorCalls, photoDraws };
 }
+
+test('uses neutral copy for the retained-photo action area', () => {
+  assert.match(resultAreaMarkup, /<h2>\s*사진 저장 또는 다시 시작\s*<\/h2>/);
+  assert.doesNotMatch(resultAreaMarkup, /사진이 완성되었습니다/);
+});
+
+test('does not render an unused image in the retained-photo action area', () => {
+  assert.doesNotMatch(resultAreaMarkup, /result-preview|resultImage|<img\b/);
+});
+
+test('does not retain dead result preview bindings or styles', () => {
+  assert.doesNotMatch(appSource, /resultImage/);
+  assert.doesNotMatch(stylesSource, /\.result-preview\b/);
+});
 
 test('draws one selected frame for every detected face and does not redetect on frame changes', async () => {
   const { app, elements, drawCalls, detectorCalls } = makeAppHarness({

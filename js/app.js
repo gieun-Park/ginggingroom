@@ -20,7 +20,6 @@ export function createApp({
         cameraBtn: documentRef.getElementById('cameraBtn'),
         frameGrid: documentRef.getElementById('frameGrid'),
         resultArea: documentRef.getElementById('resultArea'),
-        resultImage: documentRef.getElementById('resultImage'),
         downloadBtn: documentRef.getElementById('downloadBtn'),
         resetBtn: documentRef.getElementById('resetBtn'),
         video: documentRef.getElementById('video'),
