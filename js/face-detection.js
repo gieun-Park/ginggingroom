@@ -14,7 +14,7 @@ export function createFaceDetectionService({
 
   async function getDetector() {
     if (!detectorPromise) {
-      detectorPromise = (async () => {
+      const initialization = (async () => {
         const { FilesetResolver, FaceLandmarker } = await moduleLoader();
         const vision = await FilesetResolver.forVisionTasks(wasmRoot);
         return FaceLandmarker.createFromOptions(vision, {
@@ -26,10 +26,14 @@ export function createFaceDetectionService({
           outputFaceBlendshapes: false,
           outputFacialTransformationMatrixes: false
         });
-      })().catch(error => {
-        detectorPromise = null;
+      })();
+      detectorPromise = initialization;
+      try {
+        return await initialization;
+      } catch (error) {
+        if (detectorPromise === initialization) detectorPromise = null;
         throw error;
-      });
+      }
     }
     return detectorPromise;
   }
