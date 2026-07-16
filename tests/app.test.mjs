@@ -32,6 +32,9 @@ class Element {
 
   appendChild(child) { this.children.push(child); }
   addEventListener(type, handler) { this.listeners[type] = handler; }
+  removeEventListener(type, handler) {
+    if (this.listeners[type] === handler) delete this.listeners[type];
+  }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   set textContent(value) { this._textContent = String(value); }
@@ -68,7 +71,13 @@ function makeAppHarness({
   liveFaces = [],
   liveDetectorError = null,
   liveDetectorPromise = null,
+  liveDetectorOutcomes = null,
   cameraError = null,
+  playPromise = null,
+  playError = null,
+  videoWidth = 1280,
+  videoHeight = 720,
+  videoReadyState = 2,
   windowRef: windowOverrides = {}
 } = {}) {
   const ids = [
@@ -79,10 +88,15 @@ function makeAppHarness({
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
   elements.resultArea.hidden = true;
   elements.retryDetectionBtn.hidden = true;
-  elements.video.readyState = 2;
-  elements.video.videoWidth = 1280;
-  elements.video.videoHeight = 720;
-  elements.video.play = () => Promise.resolve();
+  elements.video.readyState = videoReadyState;
+  elements.video.videoWidth = videoWidth;
+  elements.video.videoHeight = videoHeight;
+  let playCalls = 0;
+  elements.video.play = () => {
+    playCalls += 1;
+    if (playError) throw playError;
+    return playPromise ?? Promise.resolve();
+  };
 
   const canvasDraws = [];
   const context = {
@@ -155,10 +169,19 @@ function makeAppHarness({
   const liveDetectorCalls = [];
   let currentLiveDetectorError = liveDetectorError;
   let liveDetectorResets = 0;
+  let liveDetectorAttempt = 0;
   const liveDetector = {
     async detectFacesForVideo(video, timestamp) {
       liveDetectorCalls.push({ video, timestamp });
       if (currentLiveDetectorError) throw currentLiveDetectorError;
+      if (liveDetectorOutcomes) {
+        const outcome = liveDetectorOutcomes[
+          Math.min(liveDetectorAttempt, liveDetectorOutcomes.length - 1)
+        ];
+        liveDetectorAttempt += 1;
+        if (outcome instanceof Error) throw outcome;
+        return await outcome;
+      }
       if (liveDetectorPromise) return await liveDetectorPromise;
       return liveFaces;
     },
@@ -237,6 +260,8 @@ function makeAppHarness({
     detectorCalls,
     liveDetectorCalls,
     get liveDetectorResets() { return liveDetectorResets; },
+    get playCalls() { return playCalls; },
+    get pendingAnimationFrames() { return animationFrames.size; },
     photoDraws,
     liveDraws,
     overlayCalls,
@@ -293,6 +318,116 @@ test('starts the camera during init', async () => {
   assert.deepEqual(harness.mediaCalls, [{ video: { facingMode: 'user' } }]);
   assert.equal(harness.elements.video.srcObject, harness.stream);
   assert.equal(harness.app.getState().camera.status, 'live');
+});
+
+test('keeps capture unavailable until current video playback is drawable', async () => {
+  const playback = deferred();
+  const harness = makeAppHarness({ playPromise: playback.promise });
+  harness.app.init();
+  await harness.flushCamera();
+
+  assert.equal(harness.elements.shutterBtn.disabled, true);
+  assert.equal(harness.elements.timerBtn.disabled, true);
+  assert.equal(harness.elements.cameraStatus.textContent, '카메라를 준비하는 중…');
+  assert.equal(harness.pendingAnimationFrames, 0);
+
+  harness.elements.timerBtn.listeners.click();
+  harness.elements.shutterBtn.listeners.click();
+  assert.equal(harness.app.getState().timerSeconds, 0);
+  assert.equal(harness.app.getState().camera.status, 'live');
+  assert.equal(harness.streamTrack.stops, 0);
+
+  playback.resolve();
+  await harness.flushCamera();
+  assert.equal(harness.elements.shutterBtn.disabled, false);
+  assert.equal(harness.elements.timerBtn.disabled, false);
+  assert.equal(harness.elements.cameraStatus.textContent, '카메라 준비 완료');
+  assert.equal(harness.pendingAnimationFrames, 1);
+});
+
+test('keeps zero-dimension playback unavailable until a drawable frame event', async () => {
+  const harness = makeAppHarness({ videoWidth: 0, videoHeight: 0 });
+  harness.app.init();
+  await harness.flushCamera();
+
+  assert.equal(harness.elements.shutterBtn.disabled, true);
+  assert.equal(harness.elements.timerBtn.disabled, true);
+  assert.equal(harness.pendingAnimationFrames, 0);
+  assert.equal(typeof harness.elements.video.listeners.loadeddata, 'function');
+
+  harness.elements.video.videoWidth = 1280;
+  harness.elements.video.videoHeight = 720;
+  harness.elements.video.listeners.loadeddata();
+
+  assert.equal(harness.elements.shutterBtn.disabled, false);
+  assert.equal(harness.elements.timerBtn.disabled, false);
+  assert.equal(harness.pendingAnimationFrames, 1);
+});
+
+test('stops media and exposes upload fallback when video playback rejects', async () => {
+  const playback = deferred();
+  const harness = makeAppHarness({ playPromise: playback.promise });
+  harness.app.init();
+  await harness.flushCamera();
+
+  playback.reject(new Error('autoplay denied'));
+  await harness.flushCamera();
+
+  assert.equal(harness.streamTrack.stops, 1);
+  assert.equal(harness.app.getState().camera.status, 'idle');
+  assert.equal(
+    harness.elements.cameraStatus.textContent,
+    '카메라를 사용할 수 없어요. 사진을 업로드해주세요.'
+  );
+  assert.equal(harness.elements.photoInput.disabled, false);
+  assert.equal(harness.elements.shutterBtn.disabled, true);
+  assert.equal(harness.pendingAnimationFrames, 0);
+});
+
+test('stops media and exposes upload fallback when video playback throws', async () => {
+  const harness = makeAppHarness({ playError: new Error('play failed') });
+  harness.app.init();
+  await harness.flushCamera();
+
+  assert.equal(harness.streamTrack.stops, 1);
+  assert.equal(harness.app.getState().camera.status, 'idle');
+  assert.equal(
+    harness.elements.cameraStatus.textContent,
+    '카메라를 사용할 수 없어요. 사진을 업로드해주세요.'
+  );
+  assert.equal(harness.elements.photoInput.disabled, false);
+  assert.equal(harness.elements.shutterBtn.disabled, true);
+  assert.equal(harness.pendingAnimationFrames, 0);
+});
+
+test('does not start playback loop after review supersedes pending playback', async () => {
+  const playback = deferred();
+  const harness = makeAppHarness({ playPromise: playback.promise });
+  harness.app.init();
+  await harness.flushCamera();
+
+  await harness.app.setPhoto(makeLoadedImage(800, 600));
+  playback.resolve();
+  await harness.flushCamera();
+
+  assert.equal(harness.app.getState().camera.status, 'review');
+  assert.equal(harness.pendingAnimationFrames, 0);
+  assert.equal(harness.elements.resultArea.hidden, false);
+});
+
+test('does not start playback loop after destroy supersedes pending playback', async () => {
+  const playback = deferred();
+  const harness = makeAppHarness({ playPromise: playback.promise });
+  harness.app.init();
+  await harness.flushCamera();
+
+  harness.app.destroy();
+  playback.resolve();
+  await harness.flushCamera();
+
+  assert.equal(harness.app.getState().camera.status, 'idle');
+  assert.equal(harness.streamTrack.stops, 1);
+  assert.equal(harness.pendingAnimationFrames, 0);
 });
 
 test('uses native pressed frame buttons and changes overlays without restarting media', async () => {
@@ -479,6 +614,32 @@ test('retake restores live detection after a detector failure', async () => {
   assert.equal(harness.elements.retryDetectionBtn.hidden, true);
 });
 
+test('retake resets live detection and rejects results from the prior camera session', async () => {
+  const oldDetection = deferred();
+  const newDetection = deferred();
+  const oldFace = { centerX: 0.2, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 };
+  const newFace = { centerX: 0.8, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 };
+  const harness = makeAppHarness({
+    liveDetectorOutcomes: [oldDetection.promise, newDetection.promise]
+  });
+  harness.app.init();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(100);
+  harness.elements.shutterBtn.listeners.click();
+
+  harness.elements.resetBtn.listeners.click();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(200);
+
+  assert.equal(harness.liveDetectorResets, 1);
+  oldDetection.resolve([oldFace]);
+  await flushPromises();
+  assert.deepEqual(harness.app.getState().liveFaces, []);
+  newDetection.resolve([newFace]);
+  await flushPromises();
+  assert.deepEqual(harness.app.getState().liveFaces, [newFace]);
+});
+
 test('still-image detection failure keeps original pixels visible and can retry', async () => {
   const harness = makeAppHarness({ faceError: new Error('model failed'), cameraError: new Error('denied') });
   harness.app.init();
@@ -573,6 +734,46 @@ test('an empty upload selection invalidates an older pending file read', () => {
 
   assert.equal(decodeWindow.images.length, 0);
   assert.equal(harness.app.getState().currentPhoto, null);
+});
+
+test('countdown capture invalidates a pending upload file read immediately', async () => {
+  const decodeWindow = makeDecodeWindow();
+  const harness = makeAppHarness({ windowRef: decodeWindow });
+  harness.app.init();
+  await harness.flushCamera();
+  selectUpload(harness.elements, { name: 'pending-read.png' });
+
+  harness.elements.timerBtn.listeners.click();
+  harness.elements.shutterBtn.listeners.click();
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,UPLOAD' } });
+  decodeWindow.images[0]?.onload();
+
+  assert.equal(decodeWindow.images.length, 0);
+  assert.equal(harness.app.getState().currentPhoto, null);
+  assert.equal(harness.app.getState().camera.status, 'countdown');
+  harness.fireTimers(5);
+  assert.equal(harness.app.getState().camera.status, 'review');
+  assert.equal(harness.streamTrack.stops, 1);
+});
+
+test('countdown capture invalidates a pending upload image decode immediately', async () => {
+  const decodeWindow = makeDecodeWindow();
+  const harness = makeAppHarness({ windowRef: decodeWindow });
+  harness.app.init();
+  await harness.flushCamera();
+  selectUpload(harness.elements, { name: 'pending-decode.png' });
+  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,UPLOAD' } });
+  const pendingUpload = decodeWindow.images[0];
+
+  harness.elements.timerBtn.listeners.click();
+  harness.elements.shutterBtn.listeners.click();
+  pendingUpload.onload();
+
+  assert.equal(harness.app.getState().currentPhoto, null);
+  assert.equal(harness.app.getState().camera.status, 'countdown');
+  harness.fireTimers(5);
+  assert.equal(harness.app.getState().camera.status, 'review');
+  assert.equal(harness.streamTrack.stops, 1);
 });
 
 test('camera capture invalidates a pending upload decode', async () => {

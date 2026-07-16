@@ -54,6 +54,9 @@ export function createApp({
   let lastDetectionAt = -Infinity;
   let liveGeneration = 0;
   let liveDetectionUnavailable = false;
+  let playbackGeneration = 0;
+  let playbackReady = false;
+  let playbackReadyListener = null;
   const preparedFrames = new Map();
 
   const faceSession = createPhotoSession({
@@ -140,6 +143,76 @@ export function createApp({
     elements.timerBtn.addEventListener('click', toggleTimer);
     elements.shutterBtn.addEventListener('click', startCapture);
     windowRef.addEventListener('beforeunload', destroy);
+  }
+
+  function clearPlaybackReadyListener() {
+    if (!playbackReadyListener) return;
+    elements.video.removeEventListener?.('loadeddata', playbackReadyListener);
+    playbackReadyListener = null;
+  }
+
+  function invalidatePlayback() {
+    playbackGeneration += 1;
+    playbackReady = false;
+    clearPlaybackReadyListener();
+  }
+
+  function updateCaptureControls() {
+    const camera = cameraSession.getState();
+    const captureReady = camera.status === 'live' && playbackReady;
+    elements.shutterBtn.disabled = !captureReady;
+    elements.timerBtn.disabled = !captureReady;
+  }
+
+  function exposeCameraFallback() {
+    elements.cameraStatus.textContent = '카메라를 사용할 수 없어요. 사진을 업로드해주세요.';
+    elements.photoInput.disabled = false;
+    elements.framePicker.hidden = false;
+  }
+
+  function failPlayback(generation) {
+    if (generation !== playbackGeneration || cameraSession.getState().status !== 'live') return;
+    invalidatePlayback();
+    stopLiveLoop();
+    cameraSession.destroy();
+    exposeCameraFallback();
+  }
+
+  function markPlaybackReady(generation) {
+    if (generation !== playbackGeneration || cameraSession.getState().status !== 'live') return;
+    if (!elements.video.videoWidth || !elements.video.videoHeight) {
+      clearPlaybackReadyListener();
+      const listener = () => {
+        if (playbackReadyListener === listener) playbackReadyListener = null;
+        markPlaybackReady(generation);
+      };
+      playbackReadyListener = listener;
+      elements.video.addEventListener('loadeddata', listener, { once: true });
+      return;
+    }
+    clearPlaybackReadyListener();
+    playbackReady = true;
+    elements.cameraStatus.textContent = '카메라 준비 완료';
+    updateCaptureControls();
+    startLiveLoop();
+  }
+
+  function startPlayback(stream) {
+    invalidatePlayback();
+    const generation = playbackGeneration;
+    elements.video.srcObject = stream;
+    elements.cameraStatus.textContent = '카메라를 준비하는 중…';
+    updateCaptureControls();
+    let playback;
+    try {
+      playback = elements.video.play();
+    } catch {
+      failPlayback(generation);
+      return;
+    }
+    Promise.resolve(playback)
+      .then(() => markPlaybackReady(generation))
+      .catch(() => failPlayback(generation));
   }
 
   function handlePhotoUpload(event) {
@@ -231,6 +304,8 @@ export function createApp({
 
   function startLiveLoop() {
     stopLiveLoop();
+    if (!playbackReady || !isCameraActive()) return;
+    if (!elements.video.videoWidth || !elements.video.videoHeight) return;
     lastDetectionAt = -Infinity;
     const generation = ++liveGeneration;
     const tick = timestamp => {
@@ -263,12 +338,14 @@ export function createApp({
   }
 
   function handleCameraChange(camera) {
+    if (['starting', 'error', 'review', 'idle'].includes(camera.status)) {
+      invalidatePlayback();
+    }
     elements.countdown.hidden = camera.status !== 'countdown';
     elements.countdown.textContent = camera.remaining ?? '';
     elements.resultArea.hidden = camera.status !== 'review';
     elements.framePicker.hidden = camera.status === 'review';
-    elements.shutterBtn.disabled = camera.status !== 'live';
-    elements.timerBtn.disabled = camera.status !== 'live';
+    updateCaptureControls();
     elements.photoInput.disabled = camera.status === 'countdown';
     Array.from(elements.frameGrid.children).forEach(item => {
       item.disabled = camera.status === 'countdown';
@@ -278,9 +355,7 @@ export function createApp({
       elements.cameraStatus.textContent = '카메라를 준비하는 중…';
     }
     if (camera.status === 'live') {
-      elements.cameraStatus.textContent = '카메라 준비 완료';
-      elements.video.srcObject = camera.stream;
-      Promise.resolve(elements.video.play()).then(startLiveLoop);
+      startPlayback(camera.stream);
     }
     if (camera.status === 'error') {
       elements.cameraStatus.textContent = '카메라를 사용할 수 없어요. 사진을 업로드해주세요.';
@@ -297,13 +372,15 @@ export function createApp({
   }
 
   function toggleTimer() {
-    if (cameraSession.getState().status !== 'live') return;
+    if (cameraSession.getState().status !== 'live' || !playbackReady) return;
     state.timerSeconds = state.timerSeconds === 5 ? 0 : 5;
     elements.timerBtn.setAttribute('aria-pressed', String(state.timerSeconds === 5));
     elements.timerValue.textContent = state.timerSeconds === 5 ? '5초' : '끔';
   }
 
   function startCapture() {
+    if (cameraSession.getState().status !== 'live' || !playbackReady) return;
+    uploadRequestGeneration += 1;
     cameraSession.capture(state.timerSeconds);
   }
 
@@ -331,11 +408,9 @@ export function createApp({
     uploadRequestGeneration += 1;
     state.currentPhoto = null;
     state.liveFaces = [];
-    if (liveDetectionUnavailable) {
-      liveDetector.reset();
-      liveDetectionUnavailable = false;
-      lastDetectionAt = -Infinity;
-    }
+    liveDetector.reset();
+    liveDetectionUnavailable = false;
+    lastDetectionAt = -Infinity;
     faceSession.reset();
     elements.photoInput.value = '';
     cameraSession.start();
@@ -375,6 +450,7 @@ export function createApp({
 
   function destroy() {
     uploadRequestGeneration += 1;
+    invalidatePlayback();
     stopLiveLoop();
     cameraSession.destroy();
   }
