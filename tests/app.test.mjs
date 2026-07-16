@@ -14,9 +14,14 @@ class Element {
     this.id = id;
     this.children = [];
     this.listeners = {};
+    this.attributes = new Map();
     this.hidden = false;
-    this.textContent = '';
+    this.disabled = false;
+    this._textContent = '';
     this.style = {};
+    this.readyState = 0;
+    this.videoWidth = 0;
+    this.videoHeight = 0;
     const classes = new Set();
     this.classList = {
       add: value => classes.add(value),
@@ -27,6 +32,10 @@ class Element {
 
   appendChild(child) { this.children.push(child); }
   addEventListener(type, handler) { this.listeners[type] = handler; }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  set textContent(value) { this._textContent = String(value); }
+  get textContent() { return this._textContent; }
   click() { this.clickCount = (this.clickCount ?? 0) + 1; }
   set innerHTML(value) { if (value === '') this.children = []; }
   get innerHTML() { return ''; }
@@ -36,38 +45,57 @@ function makeLoadedImage(width, height) {
   return { width, height, naturalWidth: width, naturalHeight: height };
 }
 
-const DEFAULT_MASK = {
-  width: 1,
-  height: 1,
-  confidence: new Float32Array([1])
-};
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function makeAppHarness({
   faces = [],
-  error = null,
-  backgroundOutcomes = [DEFAULT_MASK],
-  windowRef = {}
+  faceError = null,
+  liveFaces = [],
+  liveDetectorError = null,
+  liveDetectorPromise = null,
+  cameraError = null,
+  windowRef: windowOverrides = {}
 } = {}) {
   const ids = [
-    'canvas', 'photoInput', 'cameraBtn', 'frameGrid', 'resultArea',
+    'canvas', 'photoInput', 'frameGrid', 'framePicker', 'resultArea',
     'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn',
-    'backgroundStatus', 'retryBackgroundBtn'
+    'cameraStatus', 'countdown', 'timerBtn', 'timerValue', 'shutterBtn'
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
-  elements.resultArea.style.display = 'none';
-  const photoDraws = [];
-  const renderCalls = [];
+  elements.resultArea.hidden = true;
+  elements.retryDetectionBtn.hidden = true;
+  elements.video.readyState = 2;
+  elements.video.videoWidth = 1280;
+  elements.video.videoHeight = 720;
+  elements.video.play = () => Promise.resolve();
+
+  const canvasDraws = [];
   const context = {
-    clearRect() {},
-    fillRect() { renderCalls.push('white'); },
+    clearRect(...args) { canvasDraws.push({ kind: 'clear', args }); },
+    fillRect(...args) { canvasDraws.push({ kind: 'fill', args }); },
     fillText() {},
-    drawImage(...args) { photoDraws.push(args); },
+    drawImage(...args) { canvasDraws.push({ kind: 'draw', args }); },
     set fillStyle(value) {},
     set font(value) {},
     set textAlign(value) {}
   };
-  elements.canvas.width = 400;
-  elements.canvas.height = 500;
+  elements.canvas.width = 600;
+  elements.canvas.height = 750;
   elements.canvas.getContext = () => context;
   elements.canvas.toDataURL = () => 'data:image/png;base64,PHOTO';
 
@@ -83,73 +111,141 @@ function makeAppHarness({
     querySelectorAll: selector => selector === '.frame-item' ? elements.frameGrid.children : [],
     body: new Element('body')
   };
+
+  const streamTrack = { stops: 0, stop() { this.stops += 1; } };
+  const stream = { getTracks: () => [streamTrack] };
+  const mediaCalls = [];
+  const windowListeners = {};
+  const timers = new Map();
+  let nextTimerId = 1;
+  const animationFrames = new Map();
+  const cancelledAnimationFrames = [];
+  let nextAnimationFrameId = 1;
+  const windowRef = {
+    navigator: {
+      mediaDevices: {
+        async getUserMedia(constraints) {
+          mediaCalls.push(constraints);
+          if (cameraError) throw cameraError;
+          return stream;
+        }
+      }
+    },
+    setTimeout(callback) {
+      const id = nextTimerId++;
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+    addEventListener(type, handler) { windowListeners[type] = handler; },
+    ...windowOverrides
+  };
+
   const detectorCalls = [];
+  let currentFaceError = faceError;
   const detector = {
     async detectFaces(photo) {
       detectorCalls.push(photo);
-      if (error) throw error;
-      return faces;
+      if (currentFaceError) throw currentFaceError;
+      return await faces;
     },
-    reset() {}
+    reset() { currentFaceError = null; }
   };
-  const segmenterCalls = [];
-  const segmenterResets = [];
-  const foregroundBuilds = [];
-  const foreground = makeLoadedImage(400, 500);
-  let backgroundAttempt = 0;
-  const backgroundSegmenter = {
-    async segmentPeople(photo) {
-      segmenterCalls.push(photo);
-      const outcome = backgroundOutcomes[
-        Math.min(backgroundAttempt, backgroundOutcomes.length - 1)
-      ];
-      backgroundAttempt += 1;
-      if (outcome instanceof Error) throw outcome;
-      return await outcome;
+
+  const liveDetectorCalls = [];
+  let currentLiveDetectorError = liveDetectorError;
+  let liveDetectorResets = 0;
+  const liveDetector = {
+    async detectFacesForVideo(video, timestamp) {
+      liveDetectorCalls.push({ video, timestamp });
+      if (currentLiveDetectorError) throw currentLiveDetectorError;
+      if (liveDetectorPromise) return await liveDetectorPromise;
+      return liveFaces;
     },
     reset() {
-      segmenterResets.push(true);
+      liveDetectorResets += 1;
+      currentLiveDetectorError = null;
     }
   };
+
   const frameImages = new Map(
     FRAMES.slice(0, 2).map(frame => [frame.id, makeLoadedImage(480, 480)])
   );
-  const drawCalls = [];
+  const photoDraws = [];
+  const liveDraws = [];
+  const overlayCalls = [];
   const app = createApp({
     documentRef,
-    windowRef: { navigator: {}, addEventListener() {}, ...windowRef },
+    windowRef,
     detector,
-    backgroundSegmenter,
-    foregroundBuilder(photo, mask) {
-      foregroundBuilds.push({ photo, mask });
-      return foreground;
-    },
-    photoLayerDrawer(contextArg, source) {
-      renderCalls.push(source === foreground ? 'foreground' : 'fallback');
-      contextArg.drawImage(source, 0, 0);
-    },
+    liveDetector,
     frameImages,
     framePreloader: () => {},
     framePreparer: () => ({ width: 480, height: 480 }),
-    overlayDrawer(contextArg, prepared, frame, placements) {
-      renderCalls.push('overlay');
-      placements.forEach(placement => {
-        drawCalls.push({ kind: 'overlay', frame, placement });
-      });
+    sourceDrawer(contextArg, source, sourceSize, canvasSize) {
+      photoDraws.push([source, sourceSize, canvasSize]);
+      contextArg.drawImage(source, 0, 0);
+    },
+    liveCompositionDrawer(args) {
+      liveDraws.push(args);
+      args.context.drawImage(args.source, 0, 0);
+    },
+    overlayDrawer(contextArg, preparedFrame, frame, placements) {
+      overlayCalls.push({ context: contextArg, preparedFrame, frame, placements });
+    },
+    requestAnimationFrameRef(callback) {
+      const id = nextAnimationFrameId++;
+      animationFrames.set(id, callback);
+      return id;
+    },
+    cancelAnimationFrameRef(id) {
+      animationFrames.delete(id);
+      cancelledAnimationFrames.push(id);
     }
   });
+
+  async function flushCamera() {
+    await flushPromises();
+  }
+
+  async function runAnimationFrame(timestamp) {
+    const entry = animationFrames.entries().next().value;
+    assert.ok(entry, 'expected a scheduled animation frame');
+    const [id, callback] = entry;
+    animationFrames.delete(id);
+    callback(timestamp);
+    await flushPromises();
+  }
+
+  function fireTimers(count) {
+    for (let index = 0; index < count; index += 1) {
+      const entry = timers.entries().next().value;
+      assert.ok(entry, 'expected a scheduled timer');
+      const [id, callback] = entry;
+      timers.delete(id);
+      callback();
+    }
+  }
+
   return {
     app,
     elements,
-    drawCalls,
+    stream,
+    streamTrack,
+    mediaCalls,
+    windowListeners,
     detectorCalls,
+    liveDetectorCalls,
+    get liveDetectorResets() { return liveDetectorResets; },
     photoDraws,
-    renderCalls,
-    segmenterCalls,
-    segmenterResets,
-    foregroundBuilds,
-    foreground,
-    createdElements
+    liveDraws,
+    overlayCalls,
+    canvasDraws,
+    createdElements,
+    cancelledAnimationFrames,
+    flushCamera,
+    runAnimationFrame,
+    fireTimers
   };
 }
 
@@ -158,13 +254,8 @@ function makeDecodeWindow() {
   const images = [];
 
   class ControlledFileReader {
-    constructor() {
-      readers.push(this);
-    }
-
-    readAsDataURL(file) {
-      this.file = file;
-    }
+    constructor() { readers.push(this); }
+    readAsDataURL(file) { this.file = file; }
   }
 
   class ControlledImage {
@@ -185,11 +276,6 @@ function selectUpload(elements, file) {
   elements.photoInput.listeners.change({ target: elements.photoInput });
 }
 
-test('uses neutral copy for the retained-photo action area', () => {
-  assert.match(resultAreaMarkup, /<h2>\s*사진 저장 또는 다시 시작\s*<\/h2>/);
-  assert.doesNotMatch(resultAreaMarkup, /사진이 완성되었습니다/);
-});
-
 test('does not render an unused image in the retained-photo action area', () => {
   assert.doesNotMatch(resultAreaMarkup, /result-preview|resultImage|<img\b/);
 });
@@ -199,312 +285,308 @@ test('does not retain dead result preview bindings or styles', () => {
   assert.doesNotMatch(stylesSource, /\.result-preview\b/);
 });
 
-test('draws one selected frame for every detected face and does not redetect on frame changes', async () => {
-  const { app, elements, drawCalls, detectorCalls } = makeAppHarness({
-    faces: [
-      { centerX: 0.3, centerY: 0.4, width: 0.2, height: 0.3, rotation: 0 },
-      { centerX: 0.7, centerY: 0.4, width: 0.2, height: 0.3, rotation: 0 }
-    ]
+test('starts the camera during init', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.flushCamera();
+
+  assert.deepEqual(harness.mediaCalls, [{ video: { facingMode: 'user' } }]);
+  assert.equal(harness.elements.video.srcObject, harness.stream);
+  assert.equal(harness.app.getState().camera.status, 'live');
+});
+
+test('uses native pressed frame buttons and changes overlays without restarting media', async () => {
+  const harness = makeAppHarness({
+    liveFaces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
   });
-  app.init();
-  await app.setPhoto(makeLoadedImage(1000, 500));
-  elements.frameGrid.children[0].listeners.click();
-  assert.equal(drawCalls.filter(call => call.kind === 'overlay').length, 2);
-  elements.frameGrid.children[1].listeners.click();
-  assert.equal(detectorCalls.length, 1);
+  harness.app.init();
+  await harness.flushCamera();
+
+  const firstFrame = harness.elements.frameGrid.children[0];
+  const secondFrame = harness.elements.frameGrid.children[1];
+  assert.equal(firstFrame.tagName, 'button');
+  assert.equal(firstFrame.type, 'button');
+  assert.equal(firstFrame.getAttribute('aria-pressed'), 'false');
+
+  firstFrame.listeners.click();
+  await harness.runAnimationFrame(100);
+  await harness.runAnimationFrame(150);
+
+  assert.equal(firstFrame.getAttribute('aria-pressed'), 'true');
+  assert.equal(secondFrame.getAttribute('aria-pressed'), 'false');
+  assert.equal(harness.mediaCalls.length, 1);
+  assert.equal(harness.liveDetectorCalls.length, 1);
+  assert.equal(harness.liveDraws.some(call => call.frame?.id === FRAMES[0].id), true);
 });
 
-test('keeps the photo visible and shows retry when detection fails', async () => {
-  const { app, elements, photoDraws } = makeAppHarness({ error: new Error('model failed') });
-  app.init();
-  await app.setPhoto(makeLoadedImage(400, 500));
-  assert.ok(photoDraws.length > 0);
-  assert.equal(elements.resultArea.style.display, 'block');
-  assert.equal(elements.faceStatus.textContent, '얼굴 인식을 불러오지 못했어요.');
-  assert.equal(elements.retryDetectionBtn.hidden, false);
+test('throttles live face detection to one request per 100 milliseconds', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.flushCamera();
+
+  await harness.runAnimationFrame(100);
+  await harness.runAnimationFrame(199);
+  await harness.runAnimationFrame(200);
+
+  assert.deepEqual(
+    harness.liveDetectorCalls.map(call => call.timestamp),
+    [100, 200]
+  );
 });
 
-test('shows result controls for a retained photo and hides them on reset', async () => {
-  const { app, elements } = makeAppHarness({
-    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
-  });
-  app.init();
-  assert.equal(elements.resultArea.style.display, 'none');
+test('runs the optional five-second countdown once and locks mutable controls', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.flushCamera();
 
-  await app.setPhoto(makeLoadedImage(400, 500));
-  assert.equal(elements.resultArea.style.display, 'block');
+  harness.elements.timerBtn.listeners.click();
+  assert.equal(harness.app.getState().timerSeconds, 5);
+  assert.equal(harness.elements.timerValue.textContent, '5초');
+  assert.equal(harness.elements.timerBtn.getAttribute('aria-pressed'), 'true');
 
-  elements.resetBtn.listeners.click();
-  assert.equal(elements.resultArea.style.display, 'none');
+  harness.elements.shutterBtn.listeners.click();
+  assert.equal(harness.elements.countdown.textContent, '5');
+  assert.equal(harness.elements.countdown.hidden, false);
+  assert.equal(harness.elements.photoInput.disabled, true);
+  assert.equal(harness.elements.frameGrid.children.every(item => item.disabled), true);
+  assert.equal(harness.elements.resultArea.hidden, true);
+
+  harness.fireTimers(4);
+  assert.equal(harness.elements.resultArea.hidden, true);
+  harness.fireTimers(1);
+  assert.equal(harness.elements.resultArea.hidden, false);
+  assert.equal(harness.streamTrack.stops, 1);
+  assert.equal(harness.app.getState().camera.status, 'review');
 });
 
-test('keeps download disabled until both photo analyses settle', async () => {
-  let resolveFaces;
-  let resolveMask;
-  const pendingFaces = new Promise(resolve => { resolveFaces = resolve; });
-  const pendingMask = new Promise(resolve => { resolveMask = resolve; });
-  const { app, elements } = makeAppHarness({
-    faces: pendingFaces,
-    backgroundOutcomes: [pendingMask]
-  });
-  app.init();
+test('captures the current composed canvas and downloads that same output', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(100);
+  const drawsBeforeCapture = harness.liveDraws.length;
 
-  const pendingPhoto = app.setPhoto(makeLoadedImage(400, 500));
-  assert.equal(elements.downloadBtn.disabled, true);
+  harness.elements.shutterBtn.listeners.click();
+  harness.elements.downloadBtn.listeners.click();
 
-  resolveFaces([]);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(app.getState().analysis.status, 'empty');
-  assert.equal(elements.downloadBtn.disabled, true);
-
-  resolveMask(DEFAULT_MASK);
-  await pendingPhoto;
-  assert.equal(elements.downloadBtn.disabled, false);
+  assert.equal(harness.liveDraws.length, drawsBeforeCapture + 1);
+  assert.equal(harness.app.getState().currentPhoto, null);
+  assert.equal(harness.elements.resultArea.hidden, false);
+  const link = harness.createdElements.find(element => element.tagName === 'a');
+  assert.equal(link.href, 'data:image/png;base64,PHOTO');
+  assert.equal(link.download.startsWith('gingging-photo-'), true);
+  assert.equal(link.clickCount, 1);
 });
 
-test('disables download again for a new photo and reset', async () => {
-  let resolveSecondMask;
-  const secondMask = new Promise(resolve => { resolveSecondMask = resolve; });
-  const { app, elements } = makeAppHarness({
-    faces: [],
-    backgroundOutcomes: [DEFAULT_MASK, secondMask]
-  });
-  app.init();
-  assert.equal(elements.downloadBtn.disabled, true);
+test('keeps uploaded source pixels and unmirrored still-image frame alignment', async () => {
+  const face = { centerX: 0.25, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 };
+  const harness = makeAppHarness({ faces: [face], cameraError: new Error('denied') });
+  harness.app.init();
+  await harness.flushCamera();
+  harness.elements.frameGrid.children[0].listeners.click();
+  const photo = makeLoadedImage(800, 600);
 
-  await app.setPhoto(makeLoadedImage(400, 500));
-  assert.equal(elements.downloadBtn.disabled, false);
+  await harness.app.setPhoto(photo);
 
-  const secondPhoto = app.setPhoto(makeLoadedImage(600, 800));
-  assert.equal(elements.downloadBtn.disabled, true);
-  resolveSecondMask(DEFAULT_MASK);
-  await secondPhoto;
-  assert.equal(elements.downloadBtn.disabled, false);
-
-  elements.resetBtn.listeners.click();
-  assert.equal(elements.downloadBtn.disabled, true);
+  assert.equal(harness.photoDraws.some(args => args[0] === photo), true);
+  assert.equal(harness.canvasDraws.some(call => call.kind === 'fill'), false);
+  assert.equal(harness.overlayCalls.at(-1).placements[0].centerX, 50);
+  assert.equal('background' in harness.app.getState(), false);
 });
 
-test('disables download while a failed background analysis is retried', async () => {
-  let resolveRetryMask;
-  const retryMask = new Promise(resolve => { resolveRetryMask = resolve; });
-  const { app, elements } = makeAppHarness({
-    faces: [],
-    backgroundOutcomes: [new Error('segment failed'), retryMask]
-  });
-  app.init();
-  await app.setPhoto(makeLoadedImage(400, 500));
-  assert.equal(elements.downloadBtn.disabled, false);
+test('camera failure keeps upload fallback enabled', async () => {
+  const harness = makeAppHarness({ cameraError: new Error('denied') });
+  harness.app.init();
+  await harness.flushCamera();
 
-  const retry = elements.retryBackgroundBtn.listeners.click();
-  assert.equal(elements.downloadBtn.disabled, true);
-  resolveRetryMask(DEFAULT_MASK);
-  await retry;
-  assert.equal(elements.downloadBtn.disabled, false);
+  assert.equal(
+    harness.elements.cameraStatus.textContent,
+    '카메라를 사용할 수 없어요. 사진을 업로드해주세요.'
+  );
+  assert.equal(harness.elements.photoInput.disabled, false);
+  assert.equal(harness.elements.framePicker.hidden, false);
 });
 
-test('ignores programmatic download clicks while processing is incomplete', () => {
-  const { app, elements, createdElements } = makeAppHarness();
-  app.init();
-  const createdBeforeClick = createdElements.length;
+test('retake preserves frame and timer while starting a new stream', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.flushCamera();
+  harness.elements.frameGrid.children[0].listeners.click();
+  harness.elements.timerBtn.listeners.click();
+  harness.elements.shutterBtn.listeners.click();
+  harness.fireTimers(5);
 
-  elements.downloadBtn.listeners.click();
+  harness.elements.resetBtn.listeners.click();
+  await harness.flushCamera();
 
-  assert.equal(createdElements.length, createdBeforeClick);
+  assert.equal(harness.mediaCalls.length, 2);
+  assert.equal(harness.app.getState().selectedFrameId, FRAMES[0].id);
+  assert.equal(harness.app.getState().timerSeconds, 5);
+  assert.equal(harness.elements.frameGrid.children[0].getAttribute('aria-pressed'), 'true');
 });
 
-test('keeps result controls available when no face is found', async () => {
-  const { app, elements } = makeAppHarness({ faces: [] });
-  app.init();
-  await app.setPhoto(makeLoadedImage(400, 500));
-  assert.equal(elements.resultArea.style.display, 'block');
+test('keeps media live and retries only live detection after detector failure', async () => {
+  const harness = makeAppHarness({ liveDetectorError: new Error('model failed') });
+  harness.app.init();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(100);
+
+  assert.equal(harness.elements.retryDetectionBtn.hidden, false);
+  assert.equal(harness.elements.faceStatus.textContent, '실시간 프레임 인식을 사용할 수 없어요.');
+  await harness.runAnimationFrame(220);
+  assert.equal(harness.liveDetectorCalls.length, 1);
+
+  harness.elements.retryDetectionBtn.listeners.click();
+  assert.equal(harness.liveDetectorResets, 1);
+  assert.equal(harness.mediaCalls.length, 1);
+  assert.equal(harness.elements.retryDetectionBtn.hidden, true);
+  assert.equal(harness.elements.faceStatus.textContent, '');
+  await harness.runAnimationFrame(230);
+  assert.equal(harness.liveDetectorCalls.length, 2);
 });
 
-test('reset clears the cached analysis and status', async () => {
-  const { app, elements } = makeAppHarness({ faces: [] });
-  app.init();
-  await app.setPhoto(makeLoadedImage(400, 500));
-  elements.resetBtn.listeners.click();
-  assert.equal(elements.faceStatus.textContent, '');
-  assert.equal(app.getState().currentPhoto, null);
+test('ignores a stale live detector result after capture enters review', async () => {
+  const liveDetection = deferred();
+  const harness = makeAppHarness({ liveDetectorPromise: liveDetection.promise });
+  harness.app.init();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(100);
+
+  harness.elements.shutterBtn.listeners.click();
+  liveDetection.resolve([
+    { centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }
+  ]);
+  await flushPromises();
+
+  assert.deepEqual(harness.app.getState().liveFaces, []);
+  assert.equal(harness.app.getState().camera.status, 'review');
+});
+
+test('retake restores live detection after a detector failure', async () => {
+  const harness = makeAppHarness({ liveDetectorError: new Error('model failed') });
+  harness.app.init();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(100);
+  harness.elements.shutterBtn.listeners.click();
+
+  harness.elements.resetBtn.listeners.click();
+  await harness.flushCamera();
+  await harness.runAnimationFrame(200);
+
+  assert.equal(harness.liveDetectorResets, 1);
+  assert.equal(harness.liveDetectorCalls.length, 2);
+  assert.equal(harness.mediaCalls.length, 2);
+  assert.equal(harness.elements.retryDetectionBtn.hidden, true);
+});
+
+test('still-image detection failure keeps original pixels visible and can retry', async () => {
+  const harness = makeAppHarness({ faceError: new Error('model failed'), cameraError: new Error('denied') });
+  harness.app.init();
+  await harness.flushCamera();
+  const photo = makeLoadedImage(800, 600);
+
+  await harness.app.setPhoto(photo);
+  assert.equal(harness.photoDraws.some(args => args[0] === photo), true);
+  assert.equal(harness.elements.retryDetectionBtn.hidden, false);
+  assert.equal(harness.elements.faceStatus.textContent, '얼굴 인식을 불러오지 못했어요.');
+
+  await harness.elements.retryDetectionBtn.listeners.click();
+  assert.equal(harness.detectorCalls.length, 2);
+  assert.equal(harness.elements.retryDetectionBtn.hidden, true);
+});
+
+test('destroys camera resources on page teardown', async () => {
+  const harness = makeAppHarness();
+  harness.app.init();
+  await harness.flushCamera();
+
+  harness.windowListeners.beforeunload();
+
+  assert.equal(harness.streamTrack.stops, 1);
+  assert.equal(harness.cancelledAnimationFrames.length, 1);
+  assert.equal(harness.app.getState().camera.status, 'idle');
 });
 
 test('keeps the newest upload when image decodes finish out of order', () => {
   const decodeWindow = makeDecodeWindow();
-  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
-  app.init();
+  const harness = makeAppHarness({ cameraError: new Error('denied'), windowRef: decodeWindow });
+  harness.app.init();
 
-  selectUpload(elements, { name: 'a.png' });
+  selectUpload(harness.elements, { name: 'a.png' });
   decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
   const imageA = decodeWindow.images[0];
 
-  selectUpload(elements, { name: 'b.png' });
+  selectUpload(harness.elements, { name: 'b.png' });
   decodeWindow.readers[1].onload({ target: { result: 'data:image/png;base64,B' } });
   const imageB = decodeWindow.images[1];
 
   imageB.onload();
   imageA.onload();
 
-  assert.equal(app.getState().currentPhoto, imageB);
+  assert.equal(harness.app.getState().currentPhoto, imageB);
 });
 
 test('ignores an older upload whose file read finishes after a new selection', () => {
   const decodeWindow = makeDecodeWindow();
-  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
-  app.init();
+  const harness = makeAppHarness({ cameraError: new Error('denied'), windowRef: decodeWindow });
+  harness.app.init();
 
-  selectUpload(elements, { name: 'a.png' });
-  selectUpload(elements, { name: 'b.png' });
+  selectUpload(harness.elements, { name: 'a.png' });
+  selectUpload(harness.elements, { name: 'b.png' });
   decodeWindow.readers[1].onload({ target: { result: 'data:image/png;base64,B' } });
   decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
 
   assert.equal(decodeWindow.images.length, 1);
   decodeWindow.images[0].onload();
-  assert.equal(app.getState().currentPhoto, decodeWindow.images[0]);
+  assert.equal(harness.app.getState().currentPhoto, decodeWindow.images[0]);
 });
 
-test('reset prevents a pending image decode from restoring the photo', () => {
+test('retake invalidates pending image decode and file read callbacks', async () => {
   const decodeWindow = makeDecodeWindow();
-  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
-  app.init();
+  const harness = makeAppHarness({ cameraError: new Error('denied'), windowRef: decodeWindow });
+  harness.app.init();
+  await harness.flushCamera();
 
-  selectUpload(elements, { name: 'a.png' });
+  selectUpload(harness.elements, { name: 'decode.png' });
   decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
-  const imageA = decodeWindow.images[0];
-  elements.resetBtn.listeners.click();
-  imageA.onload();
+  const pendingImage = decodeWindow.images[0];
+  harness.elements.resetBtn.listeners.click();
+  pendingImage.onload();
 
-  assert.equal(app.getState().currentPhoto, null);
-  assert.equal(elements.resultArea.style.display, 'none');
-});
+  selectUpload(harness.elements, { name: 'read.png' });
+  const pendingReader = decodeWindow.readers[1];
+  harness.elements.resetBtn.listeners.click();
+  pendingReader.onload({ target: { result: 'data:image/png;base64,B' } });
 
-test('reset prevents a pending file read from starting image decode', () => {
-  const decodeWindow = makeDecodeWindow();
-  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
-  app.init();
-
-  selectUpload(elements, { name: 'a.png' });
-  elements.resetBtn.listeners.click();
-  decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
-
-  assert.equal(decodeWindow.images.length, 0);
-  assert.equal(app.getState().currentPhoto, null);
+  assert.equal(decodeWindow.images.length, 1);
+  assert.equal(harness.app.getState().currentPhoto, null);
 });
 
 test('an empty upload selection invalidates an older pending file read', () => {
   const decodeWindow = makeDecodeWindow();
-  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
-  app.init();
+  const harness = makeAppHarness({ cameraError: new Error('denied'), windowRef: decodeWindow });
+  harness.app.init();
 
-  selectUpload(elements, { name: 'a.png' });
-  selectUpload(elements, null);
+  selectUpload(harness.elements, { name: 'a.png' });
+  selectUpload(harness.elements, null);
   decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,A' } });
 
   assert.equal(decodeWindow.images.length, 0);
-  assert.equal(app.getState().currentPhoto, null);
+  assert.equal(harness.app.getState().currentPhoto, null);
 });
 
-test('a photo from another source invalidates a pending upload decode', async () => {
+test('camera capture invalidates a pending upload decode', async () => {
   const decodeWindow = makeDecodeWindow();
-  const { app, elements } = makeAppHarness({ windowRef: decodeWindow });
-  app.init();
+  const harness = makeAppHarness({ windowRef: decodeWindow });
+  harness.app.init();
+  await harness.flushCamera();
 
-  selectUpload(elements, { name: 'upload.png' });
+  selectUpload(harness.elements, { name: 'upload.png' });
   decodeWindow.readers[0].onload({ target: { result: 'data:image/png;base64,UPLOAD' } });
   const pendingUpload = decodeWindow.images[0];
-  const cameraPhoto = makeLoadedImage(800, 600);
-
-  await app.setPhoto(cameraPhoto);
+  harness.elements.shutterBtn.listeners.click();
   pendingUpload.onload();
 
-  assert.equal(app.getState().currentPhoto, cameraPhoto);
-});
-
-test('draws white, cached foreground, then overlays and reuses both analyses on frame changes', async () => {
-  const harness = makeAppHarness({
-    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
-  });
-  harness.app.init();
-  await harness.app.setPhoto(makeLoadedImage(400, 500));
-  harness.elements.frameGrid.children[0].listeners.click();
-
-  harness.renderCalls.length = 0;
-  harness.app.renderCanvas();
-  assert.deepEqual(harness.renderCalls, ['white', 'foreground', 'overlay']);
-  assert.equal(harness.drawCalls.at(-1).kind, 'overlay');
-
-  harness.elements.frameGrid.children[1].listeners.click();
-  assert.equal(harness.detectorCalls.length, 1);
-  assert.equal(harness.segmenterCalls.length, 1);
-  assert.equal(harness.foregroundBuilds.length, 1);
-});
-
-test('keeps the preview white while background segmentation is loading', async () => {
-  let resolveMask;
-  const pendingMask = new Promise(resolve => { resolveMask = resolve; });
-  const controlled = makeAppHarness({ backgroundOutcomes: [pendingMask] });
-  controlled.app.init();
-  const pendingPhoto = controlled.app.setPhoto(makeLoadedImage(400, 500));
-  controlled.renderCalls.length = 0;
-  controlled.app.renderCanvas();
-  assert.deepEqual(controlled.renderCalls, ['white']);
-
-  resolveMask(DEFAULT_MASK);
-  await pendingPhoto;
-});
-
-test('keeps a frame selected before a photo and applies it after both analyses finish', async () => {
-  const harness = makeAppHarness({
-    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }]
-  });
-  harness.app.init();
-  harness.elements.frameGrid.children[0].listeners.click();
-  await harness.app.setPhoto(makeLoadedImage(400, 500));
-
-  assert.equal(harness.elements.frameGrid.children[0].classList.contains('active'), true);
-  assert.equal(harness.drawCalls.at(-1).kind, 'overlay');
-  assert.equal(harness.detectorCalls.length, 1);
-  assert.equal(harness.segmenterCalls.length, 1);
-});
-
-test('shows original fallback and retries background without redetecting faces', async () => {
-  const harness = makeAppHarness({
-    faces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }],
-    backgroundOutcomes: [new Error('segment failed'), DEFAULT_MASK]
-  });
-  harness.app.init();
-  await harness.app.setPhoto(makeLoadedImage(400, 500));
-  assert.equal(
-    harness.elements.backgroundStatus.textContent,
-    '배경을 지우지 못했어요. 원본 사진으로 표시합니다.'
-  );
-  assert.equal(harness.elements.retryBackgroundBtn.hidden, false);
-  harness.elements.frameGrid.children[0].listeners.click();
-
-  harness.renderCalls.length = 0;
-  harness.app.renderCanvas();
-  assert.deepEqual(harness.renderCalls, ['white', 'fallback', 'overlay']);
-  await harness.elements.retryBackgroundBtn.listeners.click();
-  assert.equal(harness.elements.backgroundStatus.textContent, '흰색 배경을 적용했어요.');
-  assert.equal(harness.detectorCalls.length, 1);
-  assert.equal(harness.segmenterCalls.length, 2);
-  assert.equal(harness.segmenterResets.length, 1);
-});
-
-test('reset clears background state, status, and cached foreground', async () => {
-  const harness = makeAppHarness();
-  harness.app.init();
-  await harness.app.setPhoto(makeLoadedImage(400, 500));
-  harness.elements.resetBtn.listeners.click();
-
-  assert.equal(harness.app.getState().background.status, 'idle');
-  assert.equal(harness.app.getState().background.foreground, null);
-  assert.equal(harness.elements.backgroundStatus.textContent, '');
-  assert.equal(harness.elements.retryBackgroundBtn.hidden, true);
-});
-
-test('exposes independent accessible background status and retry controls', () => {
-  assert.match(indexHtml, /id="backgroundStatus"[^>]*role="status"[^>]*aria-live="polite"/);
-  assert.match(indexHtml, /id="retryBackgroundBtn"[^>]*hidden/);
-  assert.match(indexHtml, />\s*배경 다시 시도\s*</);
+  assert.equal(harness.app.getState().currentPhoto, null);
+  assert.equal(harness.app.getState().camera.status, 'review');
 });
