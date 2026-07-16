@@ -106,6 +106,62 @@ test('captures immediately when the timer is off', async () => {
   });
 });
 
+test('ignores a reentrant capture while the capture callback is running', async () => {
+  let captures = 0;
+  let session;
+  const { stream, tracks } = streamSpy();
+  session = createCameraSession({
+    getUserMedia: async () => stream,
+    onCapture: () => {
+      captures += 1;
+      assert.equal(session.getState().status, 'live');
+      assert.equal(session.getState().stream, stream);
+      assert.equal(tracks[0].stops, 0);
+      if (captures === 1) session.capture();
+    }
+  });
+  await session.start();
+
+  session.capture();
+
+  assert.equal(captures, 1);
+  assert.equal(tracks[0].stops, 1);
+  assert.deepEqual(session.getState(), {
+    status: 'review',
+    stream: null,
+    remaining: null,
+    error: null
+  });
+});
+
+test('enters review and stops the stream when the capture callback throws', async () => {
+  const captureError = new Error('capture failed');
+  let session;
+  const { stream, tracks } = streamSpy();
+  session = createCameraSession({
+    getUserMedia: async () => stream,
+    onCapture: () => {
+      assert.equal(session.getState().status, 'live');
+      assert.equal(session.getState().stream, stream);
+      assert.equal(tracks[0].stops, 0);
+      throw captureError;
+    }
+  });
+  await session.start();
+
+  assert.throws(
+    () => session.capture(),
+    error => error === captureError
+  );
+  assert.equal(tracks[0].stops, 1);
+  assert.deepEqual(session.getState(), {
+    status: 'review',
+    stream: null,
+    remaining: null,
+    error: null
+  });
+});
+
 test('publishes the startup error and can retry', async () => {
   const startupError = new Error('camera denied');
   const { stream, tracks } = streamSpy();
@@ -132,6 +188,60 @@ test('publishes the startup error and can retry', async () => {
   ]);
   assert.equal(session.getState().stream, stream);
   assert.equal(tracks[0].stops, 0);
+});
+
+test('keeps the live session when the live observer throws', async () => {
+  const states = [];
+  const { stream, tracks } = streamSpy();
+  const session = createCameraSession({
+    getUserMedia: async () => stream,
+    onChange: state => {
+      states.push(state.status);
+      if (state.status === 'live') throw new Error('observer failed');
+    }
+  });
+
+  await session.start();
+
+  assert.deepEqual(states, ['starting', 'live']);
+  assert.deepEqual(session.getState(), {
+    status: 'live',
+    stream,
+    remaining: null,
+    error: null
+  });
+  session.capture();
+  assert.equal(tracks[0].stops, 1);
+  assert.equal(session.getState().status, 'review');
+});
+
+test('continues the countdown when a countdown observer throws', async () => {
+  const timers = [];
+  const { stream, tracks } = streamSpy();
+  const session = createCameraSession({
+    getUserMedia: async () => stream,
+    setTimeoutRef: callback => {
+      timers.push(callback);
+      return timers.length;
+    },
+    onChange: state => {
+      if (state.status === 'countdown') throw new Error('observer failed');
+    }
+  });
+  await session.start();
+
+  assert.doesNotThrow(() => session.capture(2));
+  assert.equal(timers.length, 1);
+  timers[0]();
+  timers[1]();
+
+  assert.equal(tracks[0].stops, 1);
+  assert.deepEqual(session.getState(), {
+    status: 'review',
+    stream: null,
+    remaining: null,
+    error: null
+  });
 });
 
 test('enterReview cancels a countdown timer and prevents a stale capture', async () => {
@@ -194,6 +304,48 @@ test('destroy cancels a countdown and restores the exact idle state', async () =
     remaining: null,
     error: null
   });
+});
+
+test('ignores an old final timer callback during a new countdown', async () => {
+  const timers = [];
+  const cleared = [];
+  const first = streamSpy();
+  const second = streamSpy();
+  const streams = [first.stream, second.stream];
+  let captures = 0;
+  const session = createCameraSession({
+    getUserMedia: async () => streams.shift(),
+    setTimeoutRef: callback => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimeoutRef: handle => cleared.push(handle),
+    onCapture: () => { captures += 1; }
+  });
+  await session.start();
+  session.capture(2);
+  timers[0]();
+
+  session.enterReview();
+  await session.start();
+  session.capture(2);
+  timers[1]();
+
+  assert.deepEqual(cleared, [2]);
+  assert.equal(captures, 0);
+  assert.equal(second.tracks[0].stops, 0);
+  assert.deepEqual(session.getState(), {
+    status: 'countdown',
+    stream: second.stream,
+    remaining: 2,
+    error: null
+  });
+
+  timers[2]();
+  timers[3]();
+  assert.equal(captures, 1);
+  assert.equal(second.tracks[0].stops, 1);
+  assert.equal(session.getState().status, 'review');
 });
 
 test('stops a stream that resolves after destroy without leaving idle', async () => {
