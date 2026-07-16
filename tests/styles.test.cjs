@@ -4,6 +4,7 @@ const test = require('node:test');
 
 const css = fs.readFileSync('css/styles.css', 'utf8');
 const html = fs.readFileSync('index.html', 'utf8');
+const photoInputMarkup = html.match(/<input\b[^>]*\bid="photoInput"[^>]*>/)?.[0] ?? '';
 
 test('places a horizontal frame rail above the shutter', () => {
     assert.match(html, /<main class="camera-app">[\s\S]*class="camera-stage"[\s\S]*id="frameGrid"[\s\S]*class="capture-controls"[\s\S]*id="shutterBtn"/);
@@ -18,7 +19,9 @@ test('keeps the 600 by 750 canvas inside a 4:5 camera stage', () => {
 });
 
 test('provides accessible upload, shutter, timer, and countdown controls', () => {
-    assert.match(html, /<label class="control-action upload-action">[\s\S]*<input type="file" id="photoInput"[^>]*hidden>[\s\S]*<\/label>/);
+    assert.match(html, /<label class="control-action upload-action">[\s\S]*<input type="file" id="photoInput" class="visually-hidden"[^>]*>[\s\S]*<\/label>/);
+    assert.doesNotMatch(photoInputMarkup, /\shidden(?:\s|>)/);
+    assert.match(css, /\.visually-hidden\s*{[^}]*position:\s*absolute[^}]*width:\s*1px[^}]*height:\s*1px[^}]*padding:\s*0[^}]*overflow:\s*hidden[^}]*clip:\s*rect\(0,\s*0,\s*0,\s*0\)[^}]*clip-path:\s*inset\(50%\)[^}]*white-space:\s*nowrap[^}]*border:\s*0/s);
     assert.match(html, /<button id="shutterBtn"[^>]*type="button"[^>]*aria-label="사진 촬영"/);
     assert.match(html, /<button id="timerBtn"[^>]*type="button"[^>]*aria-pressed="false"/);
     assert.match(html, /<button id="timerBtn"[^>]*aria-label="5초 타이머"/);
