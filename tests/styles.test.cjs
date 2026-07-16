@@ -5,34 +5,52 @@ const test = require('node:test');
 const css = fs.readFileSync('css/styles.css', 'utf8');
 const html = fs.readFileSync('index.html', 'utf8');
 
-test('프레임 그리드 열이 이미지의 원본 너비보다 작게 축소될 수 있다', () => {
-    assert.match(css, /\.frame-grid\s*{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
-    assert.match(css, /\.frame-item\s*{[^}]*min-width:\s*0/s);
+test('places a horizontal frame rail above the shutter', () => {
+    assert.match(html, /<main class="camera-app">[\s\S]*class="camera-stage"[\s\S]*id="frameGrid"[\s\S]*class="capture-controls"[\s\S]*id="shutterBtn"/);
+    assert.doesNotMatch(html, /id="cameraBtn"/);
+    assert.doesNotMatch(html, /class="(?:booth|photo-section|frame-section|frame-grid)"/);
 });
 
-test('좁은 화면에서는 프레임 섹션을 한 열로 표시한다', () => {
-    assert.match(css, /@media\s*\(max-width:\s*900px\)\s*{[\s\S]*?\.booth\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
-});
-
-test('스크롤되는 프레임 그리드는 카드 높이만큼 각 행을 확보한다', () => {
-    assert.match(css, /\.frame-grid\s*{[^}]*grid-auto-rows:\s*max-content/s);
-    assert.match(css, /\.frame-grid\s*{[^}]*align-content:\s*start/s);
-});
-
-test('uses a sharper 4:5 logical canvas for the primary result preview', () => {
+test('keeps the 600 by 750 canvas inside a 4:5 camera stage', () => {
     assert.match(html, /<canvas id="canvas" width="600" height="750"><\/canvas>/);
-    assert.match(css, /#canvas\s*{[^}]*width:\s*100%[^}]*height:\s*auto[^}]*aspect-ratio:\s*4\s*\/\s*5/s);
+    assert.match(css, /\.camera-stage\s*{[^}]*aspect-ratio:\s*4\s*\/\s*5/s);
+    assert.match(css, /#canvas\s*{[^}]*display:\s*block[^}]*width:\s*100%[^}]*height:\s*100%/s);
 });
 
-test('emphasizes and sticks the photo preview on desktop', () => {
-    assert.match(css, /\.booth\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*7fr\)\s*minmax\(320px,\s*5fr\)/s);
-    assert.match(css, /\.photo-section\s*{[^}]*position:\s*sticky[^}]*top:\s*20px[^}]*align-self:\s*start/s);
+test('provides accessible upload, shutter, timer, and countdown controls', () => {
+    assert.match(html, /<label class="control-action upload-action">[\s\S]*<input type="file" id="photoInput"[^>]*hidden>[\s\S]*<\/label>/);
+    assert.match(html, /<button id="shutterBtn"[^>]*type="button"[^>]*aria-label="사진 촬영"/);
+    assert.match(html, /<button id="timerBtn"[^>]*type="button"[^>]*aria-pressed="false"/);
+    assert.match(html, /<button id="timerBtn"[^>]*aria-label="5초 타이머"/);
+    assert.match(html, /id="timerValue"[^>]*>끔</);
+    assert.match(html, /id="countdown"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/);
 });
 
-test('restores normal flow for the photo preview on single-column screens', () => {
-    assert.match(css, /@media\s*\(max-width:\s*900px\)\s*{[\s\S]*?\.photo-section\s*{[^}]*position:\s*static/s);
+test('uses semantic hidden state for camera and review UI', () => {
+    assert.match(html, /<video id="video"[^>]*muted[^>]*playsinline[^>]*hidden><\/video>/);
+    assert.match(html, /id="retryDetectionBtn"[^>]*type="button"[^>]*hidden/);
+    assert.match(html, /<section class="result-area" id="resultArea" hidden>/);
+    assert.doesNotMatch(html, /style="[^"]*display:\s*none/);
+    assert.match(css, /\.countdown\[hidden\]\s*{[^}]*display:\s*none/s);
+    assert.match(css, /\.result-area:not\(\[hidden\]\)\s*{[^}]*display:\s*flex/s);
 });
 
-test('keeps two shrinkable frame columns without horizontal overflow on phones', () => {
-    assert.match(css, /@media\s*\(max-width:\s*480px\)\s*{[\s\S]*?\.frame-grid\s*{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)[^}]*overflow-x:\s*hidden/s);
+test('uses a horizontal frame rail with pressed selection and a circular shutter', () => {
+    assert.match(css, /\.frame-rail\s*{[^}]*display:\s*flex[^}]*overflow-x:\s*auto[^}]*scroll-snap-type:\s*x\s+proximity/s);
+    assert.match(css, /\.frame-item\s*{[^}]*flex:\s*0\s+0\s+76px[^}]*width:\s*76px[^}]*scroll-snap-align:\s*center/s);
+    assert.match(css, /\.frame-item\s*{[^}]*padding:\s*0/s);
+    assert.match(css, /\.frame-item\[aria-pressed="true"\]\s*{[^}]*border-color:\s*#c41e3a/s);
+    assert.match(css, /\.shutter-btn\s*{[^}]*width:\s*76px[^}]*height:\s*76px[^}]*border-radius:\s*50%/s);
+});
+
+test('keeps interactive controls visibly focused', () => {
+    assert.match(css, /:focus-visible\s*{[^}]*outline:\s*3px\s+solid\s+#c41e3a[^}]*outline-offset:\s*3px/s);
+    assert.match(css, /\.upload-action:focus-within\s*{[^}]*outline:\s*3px\s+solid\s+#c41e3a/s);
+});
+
+test('fits mobile viewports without page overflow and respects reduced motion', () => {
+    assert.match(css, /body\s*{[^}]*overflow-x:\s*hidden/s);
+    assert.match(css, /\.camera-app\s*{[^}]*width:\s*min\(100%,\s*560px\)/s);
+    assert.match(css, /@media\s*\(max-width:\s*480px\)\s*{[\s\S]*?body\s*{[^}]*padding:\s*0[^}]*}[\s\S]*?\.camera-card\s*{[^}]*border-radius:\s*0[^}]*padding:\s*12px/s);
+    assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*{[\s\S]*?\*,\s*\*::before,\s*\*::after\s*{[^}]*animation-duration:\s*\.01ms\s*!important[^}]*transition-duration:\s*\.01ms\s*!important/s);
 });
