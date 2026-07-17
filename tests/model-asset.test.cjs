@@ -13,13 +13,11 @@ test('ships the local MediaPipe face landmarker model', () => {
   );
 });
 
-test('ships the pinned local MediaPipe selfie segmenter model', () => {
-  const modelPath = 'assets/models/selfie_segmenter.tflite';
-  const model = fs.readFileSync(modelPath);
-  const stat = fs.statSync(modelPath);
-  assert.equal(stat.size, 249_537);
-  assert.equal(
-    crypto.createHash('sha256').update(model).digest('hex'),
-    '191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b'
-  );
+test('does not ship retired background segmentation files', () => {
+  [
+    'assets/models/selfie_segmenter.tflite',
+    'js/background-composite.js',
+    'js/background-segmentation.js',
+    'js/background-session.js'
+  ].forEach(path => assert.equal(fs.existsSync(path), false, path));
 });

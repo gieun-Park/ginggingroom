@@ -310,6 +310,12 @@ test('does not retain dead result preview bindings or styles', () => {
   assert.doesNotMatch(stylesSource, /\.result-preview\b/);
 });
 
+test('does not integrate automatic white-background processing', () => {
+  assert.doesNotMatch(appSource, /background-(?:composite|segmentation|session)/);
+  assert.doesNotMatch(indexHtml, /backgroundStatus|retryBackgroundBtn|흰색 배경/);
+  assert.doesNotMatch(appSource, /fillCanvasWhite|createPersonForeground|SelfieSegmenter/);
+});
+
 test('starts the camera during init', async () => {
   const harness = makeAppHarness();
   harness.app.init();
