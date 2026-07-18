@@ -51,7 +51,10 @@ const DEFINITIONS = [
       layout: {
         mode: 'paired',
         contentBounds: boundsFromBox([88, 152, 393, 328]),
-        viewportPadding: 0.04
+        viewportPadding: 0.04,
+        portraitInset: {
+          sourceWidthScale: 1.35
+        }
       }
     }],
   ['frame-26', '프레임 26', 'frame_26.png', [210, 178, 269, 239]]
