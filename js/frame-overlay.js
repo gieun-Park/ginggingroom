@@ -6,7 +6,6 @@ export function prepareFrameImage(frameImage, frame, {
   const resolvedMaskScale = isFinitePositive(maskScale) ? maskScale : 1;
   canvas.width = frameImage.naturalWidth;
   canvas.height = frameImage.naturalHeight;
-  canvas.maskScale = resolvedMaskScale;
   const context = canvas.getContext('2d');
   context.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
   context.globalCompositeOperation = 'destination-out';
@@ -31,107 +30,7 @@ function isFinitePositive(value) {
   return Number.isFinite(value) && value > 0;
 }
 
-function createBrowserCanvas() {
-  return typeof document === 'undefined'
-    ? null
-    : document.createElement('canvas');
-}
-
-function captureFacePortrait(context, placement, sourceWidthScale, createCanvas) {
-  const sourceCanvas = context.canvas;
-  if (
-    !sourceCanvas
-    || !isFinitePositive(sourceCanvas.width)
-    || !isFinitePositive(sourceCanvas.height)
-    || !Number.isFinite(placement?.centerX)
-    || !Number.isFinite(placement?.centerY)
-    || !isFinitePositive(placement?.width)
-    || !isFinitePositive(sourceWidthScale)
-    || typeof createCanvas !== 'function'
-  ) return null;
-
-  const cropSide = Math.min(
-    placement.width * sourceWidthScale,
-    sourceCanvas.width,
-    sourceCanvas.height
-  );
-  if (!isFinitePositive(cropSide)) return null;
-  const cropLeft = Math.min(
-    Math.max(placement.centerX - cropSide / 2, 0),
-    sourceCanvas.width - cropSide
-  );
-  const cropTop = Math.min(
-    Math.max(placement.centerY - cropSide / 2, 0),
-    sourceCanvas.height - cropSide
-  );
-
-  try {
-    const portrait = createCanvas();
-    if (!portrait) return null;
-    portrait.width = Math.max(1, Math.round(cropSide));
-    portrait.height = Math.max(1, Math.round(cropSide));
-    const portraitContext = portrait.getContext?.('2d');
-    if (!portraitContext) return null;
-    portraitContext.drawImage(
-      sourceCanvas,
-      cropLeft,
-      cropTop,
-      cropSide,
-      cropSide,
-      0,
-      0,
-      portrait.width,
-      portrait.height
-    );
-    return portrait;
-  } catch {
-    return null;
-  }
-}
-
-function drawPortraitInset(
-  context,
-  portrait,
-  placement,
-  anchorWidth,
-  anchorHeight,
-  pairScale,
-  preparedMaskScale
-) {
-  const targetWidth = anchorWidth * pairScale * preparedMaskScale;
-  const targetHeight = anchorHeight * pairScale * preparedMaskScale;
-  if (!isFinitePositive(targetWidth) || !isFinitePositive(targetHeight)) return;
-
-  context.save();
-  context.beginPath();
-  context.ellipse(
-    placement.centerX,
-    placement.centerY,
-    targetWidth / 2,
-    targetHeight / 2,
-    0,
-    0,
-    Math.PI * 2
-  );
-  context.clip();
-  context.drawImage(
-    portrait,
-    placement.centerX - targetWidth / 2,
-    placement.centerY - targetHeight / 2,
-    targetWidth,
-    targetHeight
-  );
-  context.restore();
-}
-
-function drawPairedFrame(
-  context,
-  preparedFrame,
-  frame,
-  placements,
-  overlayScale,
-  createCanvas
-) {
+function drawPairedFrame(context, preparedFrame, frame, placements, overlayScale) {
   const canvas = context.canvas;
   const layout = frame.layout;
   const bounds = layout?.contentBounds;
@@ -186,32 +85,10 @@ function drawPairedFrame(
     (placement.centerY - margin) / (anchorY - contentTop),
     (canvas.height - margin - placement.centerY) / (contentBottom - anchorY)
   );
-  const scale = Math.min(faceFitScale, containScale);
+  const scale = layout.scaleMode === 'face'
+    ? faceFitScale
+    : Math.min(faceFitScale, containScale);
   if (!isFinitePositive(scale)) return false;
-
-  const portraitConfig = layout.portraitInset;
-  if (isFinitePositive(portraitConfig?.sourceWidthScale)) {
-    const portrait = captureFacePortrait(
-      context,
-      placement,
-      portraitConfig.sourceWidthScale,
-      createCanvas
-    );
-    if (portrait) {
-      const preparedMaskScale = isFinitePositive(preparedFrame.maskScale)
-        ? preparedFrame.maskScale
-        : 1;
-      drawPortraitInset(
-        context,
-        portrait,
-        placement,
-        anchorWidth,
-        anchorHeight,
-        scale,
-        preparedMaskScale
-      );
-    }
-  }
 
   context.save();
   context.translate(placement.centerX, placement.centerY);
@@ -226,19 +103,11 @@ export function drawFrameOverlays(
   preparedFrame,
   frame,
   placements,
-  overlayScale = 1,
-  { createCanvas = createBrowserCanvas } = {}
+  overlayScale = 1
 ) {
   if (
     frame.layout?.mode === 'paired'
-    && drawPairedFrame(
-      context,
-      preparedFrame,
-      frame,
-      placements,
-      overlayScale,
-      createCanvas
-    )
+    && drawPairedFrame(context, preparedFrame, frame, placements, overlayScale)
   ) return;
 
   const anchorX = frame.faceAnchor.centerX * preparedFrame.width;
