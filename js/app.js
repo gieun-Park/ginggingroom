@@ -17,7 +17,7 @@ import { createPhotoSession } from './photo-session.js';
 const DEFAULT_RENDERING_PROFILE = Object.freeze({ overlayScale: 1, maskScale: 1 });
 const MOBILE_CAMERA_RENDERING_PROFILE = Object.freeze({
   overlayScale: 0.8,
-  maskScale: 1.25
+  maskScale: 1.1
 });
 const MOBILE_CAMERA_QUERY = '(max-width: 480px)';
 const TIMER_OPTIONS = Object.freeze([0, 3, 5, 7]);

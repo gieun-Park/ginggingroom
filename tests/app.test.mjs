@@ -592,7 +592,7 @@ test('uses native pressed frame buttons and changes overlays without restarting 
   assert.equal(harness.liveDraws.some(call => call.frame?.id === FRAMES[0].id), true);
 });
 
-test('uses the compensated 80 percent frame profile only for mobile camera composition', async () => {
+test('uses the balanced 80 percent frame profile only for mobile camera composition', async () => {
   const harness = makeAppHarness({
     liveFaces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }],
     windowRef: {
@@ -605,8 +605,8 @@ test('uses the compensated 80 percent frame profile only for mobile camera compo
   await harness.runAnimationFrame(100);
 
   assert.equal(harness.liveDraws.at(-1).overlayScale, 0.8);
-  assert.equal(harness.liveDraws.at(-1).preparedFrame.maskScale, 1.25);
-  assert.equal(harness.framePrepareCalls.at(-1).options.maskScale, 1.25);
+  assert.equal(harness.liveDraws.at(-1).preparedFrame.maskScale, 1.1);
+  assert.equal(harness.framePrepareCalls.at(-1).options.maskScale, 1.1);
 
   harness.elements.shutterBtn.listeners.click();
   assert.equal(harness.liveDraws.at(-1).overlayScale, 0.8);
@@ -645,7 +645,7 @@ test('caches normal and mobile prepared frame variants separately', async () => 
 
   assert.deepEqual(
     harness.framePrepareCalls.map(call => call.options.maskScale),
-    [1.25, 1]
+    [1.1, 1]
   );
 });
 
