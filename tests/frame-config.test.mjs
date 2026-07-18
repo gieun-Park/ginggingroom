@@ -56,16 +56,15 @@ test('calibrates frame 22 erase mask without changing its fit anchor', () => {
   assert.equal(frame.mobileMaskScale, 1);
 });
 
-test('marks frame 25 as one viewport-contained paired portrait layout', () => {
+test('marks frame 25 as a paired single-face layout', () => {
   const frame = FRAMES.find(({ id }) => id === 'frame-25');
   assert.deepEqual(frame.layout, {
     mode: 'paired',
     contentBounds: boundsFromBox([88, 152, 393, 328]),
     viewportPadding: 0.04,
-    portraitInset: {
-      sourceWidthScale: 1.35
-    }
+    scaleMode: 'face'
   });
+  assert.equal(frame.layout.portraitInset, undefined);
   assert.equal(frame.maskAnchors.length, 2);
 });
 
