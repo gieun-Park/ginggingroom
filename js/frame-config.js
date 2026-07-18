@@ -7,6 +7,15 @@ function anchorFromBox([left, top, right, bottom]) {
   };
 }
 
+function boundsFromBox([left, top, right, bottom]) {
+  return {
+    left: left / 480,
+    top: top / 480,
+    right: right / 480,
+    bottom: bottom / 480
+  };
+}
+
 const DEFINITIONS = [
   ['frame-1', '프레임 1', 'frame_01.png', [180, 184, 299, 269]],
   ['frame-2', '프레임 2', 'frame_02.png', [196, 190, 303, 293]],
@@ -29,18 +38,38 @@ const DEFINITIONS = [
   ['frame-19', '프레임 19', 'frame_19.png', [215, 208, 263, 244]],
   ['frame-20', '프레임 20', 'frame_20.png', [210, 194, 248, 231]],
   ['frame-21', '프레임 21', 'frame_21.png', [219, 179, 260, 219]],
-  ['frame-22', '프레임 22', 'frame_22.png', [210, 178, 263, 242]],
+  ['frame-22', '프레임 22', 'frame_22.png',
+    [210, 178, 263, 242],
+    [[213, 193, 263, 242]],
+    { mobileMaskScale: 1 }],
   ['frame-23', '프레임 23', 'frame_23.png', [246, 193, 290, 236]],
   ['frame-24', '프레임 24', 'frame_24.png', [216, 243, 252, 278]],
-  ['frame-25', '프레임 25', 'frame_25.png', [148, 222, 191, 262], [[148, 222, 191, 262], [290, 197, 350, 257]]],
+  ['frame-25', '프레임 25', 'frame_25.png',
+    [148, 222, 191, 262],
+    [[148, 222, 191, 262], [290, 197, 350, 257]],
+    {
+      layout: {
+        mode: 'paired',
+        contentBounds: boundsFromBox([88, 152, 393, 328]),
+        viewportPadding: 0.04
+      }
+    }],
   ['frame-26', '프레임 26', 'frame_26.png', [210, 178, 269, 239]]
 ];
 
-export const FRAMES = DEFINITIONS.map(([id, name, filename, faceBox, maskBoxes = [faceBox]]) => ({
+export const FRAMES = DEFINITIONS.map(([
+  id,
+  name,
+  filename,
+  faceBox,
+  maskBoxes = [faceBox],
+  rendering = {}
+]) => ({
   id,
   name,
   src: `assets/frames/${filename}`,
   faceAnchor: anchorFromBox(faceBox),
   maskAnchors: maskBoxes.map(anchorFromBox),
-  fitPadding: 1.08
+  fitPadding: 1.08,
+  ...rendering
 }));
