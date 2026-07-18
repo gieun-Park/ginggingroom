@@ -24,9 +24,22 @@ test('provides accessible upload, shutter, timer, and countdown controls', () =>
     assert.match(css, /\.visually-hidden\s*{[^}]*position:\s*absolute[^}]*width:\s*1px[^}]*height:\s*1px[^}]*padding:\s*0[^}]*overflow:\s*hidden[^}]*clip:\s*rect\(0,\s*0,\s*0,\s*0\)[^}]*clip-path:\s*inset\(50%\)[^}]*white-space:\s*nowrap[^}]*border:\s*0/s);
     assert.match(html, /<button id="shutterBtn"[^>]*type="button"[^>]*aria-label="사진 촬영"/);
     assert.match(html, /<button id="timerBtn"[^>]*type="button"[^>]*aria-pressed="false"/);
-    assert.match(html, /<button id="timerBtn"[^>]*aria-label="5초 타이머"/);
+    assert.match(html, /<button id="timerBtn"[^>]*aria-label="타이머: 끔"/);
     assert.match(html, /id="timerValue"[^>]*>끔</);
     assert.match(html, /id="countdown"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/);
+});
+
+test('provides an accessible hardware zoom group inside the camera stage', () => {
+    assert.match(html, /class="camera-stage"[\s\S]*id="zoomControls"[^>]*role="group"[^>]*aria-label="카메라 배율"[^>]*hidden/);
+    assert.match(html, /id="zoom05Btn"[^>]*aria-pressed="false"[^>]*>0\.5x</);
+    assert.match(html, /id="zoom08Btn"[^>]*aria-pressed="false"[^>]*>0\.8x</);
+    assert.match(html, /id="zoom1Btn"[^>]*aria-pressed="false"[^>]*>1x</);
+});
+
+test('keeps zoom controls touch-sized and camera status clear of the zoom pill', () => {
+    assert.match(css, /\.camera-zoom\s*{[^}]*position:\s*absolute[^}]*left:\s*50%[^}]*bottom:\s*16px[^}]*display:\s*flex/s);
+    assert.match(css, /\.zoom-btn\s*{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+    assert.match(css, /\.camera-status\s*{[^}]*top:\s*18px[^}]*bottom:\s*auto/s);
 });
 
 test('uses semantic hidden state for camera and review UI', () => {

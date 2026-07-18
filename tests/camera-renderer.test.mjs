@@ -58,11 +58,13 @@ test('draws camera pixels before overlays', () => {
     faces: [{ centerX: .25, centerY: .5, width: .2, height: .3, rotation: 0 }],
     preparedFrame: {},
     frame: {},
+    overlayScale: 0.8,
     overlayDrawer: (...args) => overlays.push(args)
   });
   assert.equal(context.calls[0][0], 'clearRect');
   assert.equal(context.calls.some(call => call[0] === 'drawImage'), true);
   assert.equal(overlays[0][3][0].centerX, 300);
+  assert.equal(overlays[0][4], 0.8);
 });
 
 test('draws uploaded sources without mirroring', () => {

@@ -78,16 +78,22 @@ function makeAppHarness({
   videoWidth = 1280,
   videoHeight = 720,
   videoReadyState = 2,
+  zoomCapabilities = {},
+  zoomSettings = {},
+  zoomConstraintError = null,
+  zoomConstraintPromise = null,
   windowRef: windowOverrides = {}
 } = {}) {
   const ids = [
     'canvas', 'photoInput', 'frameGrid', 'framePicker', 'resultArea',
     'downloadBtn', 'resetBtn', 'video', 'faceStatus', 'retryDetectionBtn',
-    'cameraStatus', 'countdown', 'timerBtn', 'timerValue', 'shutterBtn'
+    'cameraStatus', 'countdown', 'timerBtn', 'timerValue', 'shutterBtn',
+    'zoomControls', 'zoom05Btn', 'zoom08Btn', 'zoom1Btn'
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
   elements.resultArea.hidden = true;
   elements.retryDetectionBtn.hidden = true;
+  elements.zoomControls.hidden = true;
   elements.video.readyState = videoReadyState;
   elements.video.videoWidth = videoWidth;
   elements.video.videoHeight = videoHeight;
@@ -126,8 +132,22 @@ function makeAppHarness({
     body: new Element('body')
   };
 
-  const streamTrack = { stops: 0, stop() { this.stops += 1; } };
-  const stream = { getTracks: () => [streamTrack] };
+  const zoomConstraintCalls = [];
+  const streamTrack = {
+    stops: 0,
+    stop() { this.stops += 1; },
+    getCapabilities() { return zoomCapabilities; },
+    getSettings() { return zoomSettings; },
+    async applyConstraints(constraints) {
+      zoomConstraintCalls.push(constraints);
+      if (zoomConstraintPromise) await zoomConstraintPromise;
+      if (zoomConstraintError) throw zoomConstraintError;
+    }
+  };
+  const stream = {
+    getTracks: () => [streamTrack],
+    getVideoTracks: () => [streamTrack]
+  };
   const mediaCalls = [];
   const windowListeners = {};
   const timers = new Map();
@@ -197,6 +217,7 @@ function makeAppHarness({
   const photoDraws = [];
   const liveDraws = [];
   const overlayCalls = [];
+  const framePrepareCalls = [];
   const app = createApp({
     documentRef,
     windowRef,
@@ -204,7 +225,14 @@ function makeAppHarness({
     liveDetector,
     frameImages,
     framePreloader: () => {},
-    framePreparer: () => ({ width: 480, height: 480 }),
+    framePreparer(frameImage, frame, options) {
+      framePrepareCalls.push({ frameImage, frame, options });
+      return {
+        width: 480,
+        height: 480,
+        maskScale: options?.maskScale ?? 1
+      };
+    },
     sourceDrawer(contextArg, source, sourceSize, canvasSize) {
       photoDraws.push([source, sourceSize, canvasSize]);
       contextArg.drawImage(source, 0, 0);
@@ -213,8 +241,14 @@ function makeAppHarness({
       liveDraws.push(args);
       args.context.drawImage(args.source, 0, 0);
     },
-    overlayDrawer(contextArg, preparedFrame, frame, placements) {
-      overlayCalls.push({ context: contextArg, preparedFrame, frame, placements });
+    overlayDrawer(contextArg, preparedFrame, frame, placements, overlayScale = 1) {
+      overlayCalls.push({
+        context: contextArg,
+        preparedFrame,
+        frame,
+        placements,
+        overlayScale
+      });
     },
     requestAnimationFrameRef(callback) {
       const id = nextAnimationFrameId++;
@@ -255,6 +289,7 @@ function makeAppHarness({
     elements,
     stream,
     streamTrack,
+    zoomConstraintCalls,
     mediaCalls,
     windowListeners,
     detectorCalls,
@@ -265,6 +300,7 @@ function makeAppHarness({
     photoDraws,
     liveDraws,
     overlayCalls,
+    framePrepareCalls,
     canvasDraws,
     createdElements,
     cancelledAnimationFrames,
@@ -324,6 +360,102 @@ test('starts the camera during init', async () => {
   assert.deepEqual(harness.mediaCalls, [{ video: { facingMode: 'user' } }]);
   assert.equal(harness.elements.video.srcObject, harness.stream);
   assert.equal(harness.app.getState().camera.status, 'live');
+});
+
+test('shows only supported zoom choices and marks the active setting', async () => {
+  const harness = makeAppHarness({
+    zoomCapabilities: { zoom: { min: 0.5, max: 1, step: 0.1 } },
+    zoomSettings: { zoom: 1 }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+
+  assert.equal(harness.elements.zoomControls.hidden, false);
+  assert.equal(harness.elements.zoom05Btn.hidden, false);
+  assert.equal(harness.elements.zoom08Btn.hidden, false);
+  assert.equal(harness.elements.zoom1Btn.hidden, false);
+  assert.equal(harness.elements.zoom1Btn.getAttribute('aria-pressed'), 'true');
+
+  await harness.elements.zoom08Btn.listeners.click();
+
+  assert.deepEqual(
+    harness.zoomConstraintCalls,
+    [{ advanced: [{ zoom: 0.8 }] }]
+  );
+  assert.equal(harness.elements.zoom08Btn.getAttribute('aria-pressed'), 'true');
+  assert.equal(harness.app.getState().preferredZoom, 0.8);
+});
+
+test('hides the zoom group when fewer than two choices are supported', async () => {
+  const harness = makeAppHarness({
+    zoomCapabilities: { zoom: { min: 1, max: 1, step: 0.1 } },
+    zoomSettings: { zoom: 1 }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+
+  assert.equal(harness.elements.zoomControls.hidden, true);
+  assert.deepEqual(harness.app.getState().supportedZooms, [1]);
+});
+
+test('keeps the camera live and hides zoom after constraint failure', async () => {
+  const harness = makeAppHarness({
+    zoomCapabilities: { zoom: { min: 0.5, max: 1, step: 0.1 } },
+    zoomSettings: { zoom: 1 },
+    zoomConstraintError: new Error('unsupported')
+  });
+  harness.app.init();
+  await harness.flushCamera();
+
+  await harness.elements.zoom08Btn.listeners.click();
+
+  assert.equal(harness.app.getState().camera.status, 'live');
+  assert.equal(harness.streamTrack.stops, 0);
+  assert.equal(harness.elements.zoomControls.hidden, true);
+  assert.equal(
+    harness.elements.cameraStatus.textContent,
+    '이 기기에서는 카메라 배율을 바꿀 수 없어요.'
+  );
+});
+
+test('ignores a zoom result after capture replaces the active stream state', async () => {
+  const pendingZoom = deferred();
+  const harness = makeAppHarness({
+    zoomCapabilities: { zoom: { min: 0.5, max: 1, step: 0.1 } },
+    zoomSettings: { zoom: 1 },
+    zoomConstraintPromise: pendingZoom.promise
+  });
+  harness.app.init();
+  await harness.flushCamera();
+
+  const zoomChange = harness.elements.zoom08Btn.listeners.click();
+  harness.elements.shutterBtn.listeners.click();
+  pendingZoom.resolve();
+  await zoomChange;
+
+  assert.equal(harness.app.getState().camera.status, 'review');
+  assert.equal(harness.app.getState().preferredZoom, null);
+  assert.equal(harness.elements.zoomControls.hidden, true);
+});
+
+test('reapplies a preferred zoom on retake only when the new stream supports it', async () => {
+  const harness = makeAppHarness({
+    zoomCapabilities: { zoom: { min: 0.5, max: 1, step: 0.1 } },
+    zoomSettings: { zoom: 1 }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+  await harness.elements.zoom08Btn.listeners.click();
+  harness.elements.shutterBtn.listeners.click();
+
+  harness.elements.resetBtn.listeners.click();
+  await harness.flushCamera();
+
+  assert.deepEqual(harness.zoomConstraintCalls, [
+    { advanced: [{ zoom: 0.8 }] },
+    { advanced: [{ zoom: 0.8 }] }
+  ]);
+  assert.equal(harness.app.getState().preferredZoom, 0.8);
 });
 
 test('keeps capture unavailable until current video playback is drawable', async () => {
@@ -460,6 +592,63 @@ test('uses native pressed frame buttons and changes overlays without restarting 
   assert.equal(harness.liveDraws.some(call => call.frame?.id === FRAMES[0].id), true);
 });
 
+test('uses the compensated 80 percent frame profile only for mobile camera composition', async () => {
+  const harness = makeAppHarness({
+    liveFaces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }],
+    windowRef: {
+      matchMedia: query => ({ matches: query === '(max-width: 480px)' })
+    }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+  harness.elements.frameGrid.children[0].listeners.click();
+  await harness.runAnimationFrame(100);
+
+  assert.equal(harness.liveDraws.at(-1).overlayScale, 0.8);
+  assert.equal(harness.liveDraws.at(-1).preparedFrame.maskScale, 1.25);
+  assert.equal(harness.framePrepareCalls.at(-1).options.maskScale, 1.25);
+
+  harness.elements.shutterBtn.listeners.click();
+  assert.equal(harness.liveDraws.at(-1).overlayScale, 0.8);
+});
+
+test('keeps uploaded photos at full frame scale on mobile viewports', async () => {
+  const face = { centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 };
+  const harness = makeAppHarness({
+    faces: [face],
+    cameraError: new Error('denied'),
+    windowRef: {
+      matchMedia: query => ({ matches: query === '(max-width: 480px)' })
+    }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+  harness.elements.frameGrid.children[0].listeners.click();
+
+  await harness.app.setPhoto(makeLoadedImage(800, 600));
+
+  assert.equal(harness.framePrepareCalls.at(-1).options.maskScale, 1);
+  assert.equal(harness.overlayCalls.at(-1).overlayScale, 1);
+});
+
+test('caches normal and mobile prepared frame variants separately', async () => {
+  const mediaQuery = { matches: true };
+  const harness = makeAppHarness({
+    windowRef: { matchMedia: () => mediaQuery }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+  harness.elements.frameGrid.children[0].listeners.click();
+  await harness.runAnimationFrame(100);
+  mediaQuery.matches = false;
+  await harness.runAnimationFrame(200);
+
+  assert.deepEqual(
+    harness.framePrepareCalls.map(call => call.options.maskScale),
+    [1.25, 1]
+  );
+});
+
 test('throttles live face detection to one request per 100 milliseconds', async () => {
   const harness = makeAppHarness();
   harness.app.init();
@@ -475,24 +664,49 @@ test('throttles live face detection to one request per 100 milliseconds', async 
   );
 });
 
-test('runs the optional five-second countdown once and locks mutable controls', async () => {
+test('cycles the timer through off, 3, 5, and 7 seconds', async () => {
   const harness = makeAppHarness();
   harness.app.init();
   await harness.flushCamera();
 
+  for (const [seconds, text] of [[3, '3초'], [5, '5초'], [7, '7초'], [0, '끔']]) {
+    harness.elements.timerBtn.listeners.click();
+    assert.equal(harness.app.getState().timerSeconds, seconds);
+    assert.equal(harness.elements.timerValue.textContent, text);
+    assert.equal(
+      harness.elements.timerBtn.getAttribute('aria-label'),
+      `타이머: ${text}`
+    );
+    assert.equal(
+      harness.elements.timerBtn.getAttribute('aria-pressed'),
+      String(seconds !== 0)
+    );
+  }
+});
+
+test('runs the selected seven-second countdown once and locks mutable controls', async () => {
+  const harness = makeAppHarness({
+    zoomCapabilities: { zoom: { min: 0.5, max: 1, step: 0.1 } },
+    zoomSettings: { zoom: 1 }
+  });
+  harness.app.init();
+  await harness.flushCamera();
   harness.elements.timerBtn.listeners.click();
-  assert.equal(harness.app.getState().timerSeconds, 5);
-  assert.equal(harness.elements.timerValue.textContent, '5초');
-  assert.equal(harness.elements.timerBtn.getAttribute('aria-pressed'), 'true');
+  harness.elements.timerBtn.listeners.click();
+  harness.elements.timerBtn.listeners.click();
 
   harness.elements.shutterBtn.listeners.click();
-  assert.equal(harness.elements.countdown.textContent, '5');
+
+  assert.equal(harness.elements.countdown.textContent, '7');
   assert.equal(harness.elements.countdown.hidden, false);
   assert.equal(harness.elements.photoInput.disabled, true);
   assert.equal(harness.elements.frameGrid.children.every(item => item.disabled), true);
+  assert.equal(harness.elements.zoom05Btn.disabled, true);
+  assert.equal(harness.elements.timerBtn.disabled, true);
+  assert.equal(harness.elements.shutterBtn.disabled, true);
   assert.equal(harness.elements.resultArea.hidden, true);
 
-  harness.fireTimers(4);
+  harness.fireTimers(6);
   assert.equal(harness.elements.resultArea.hidden, true);
   harness.fireTimers(1);
   assert.equal(harness.elements.resultArea.hidden, false);
@@ -553,6 +767,7 @@ test('retake preserves frame and timer while starting a new stream', async () =>
   harness.app.init();
   await harness.flushCamera();
   harness.elements.frameGrid.children[0].listeners.click();
+  harness.elements.timerBtn.listeners.click();
   harness.elements.timerBtn.listeners.click();
   harness.elements.shutterBtn.listeners.click();
   harness.fireTimers(5);
@@ -757,7 +972,7 @@ test('countdown capture invalidates a pending upload file read immediately', asy
   assert.equal(decodeWindow.images.length, 0);
   assert.equal(harness.app.getState().currentPhoto, null);
   assert.equal(harness.app.getState().camera.status, 'countdown');
-  harness.fireTimers(5);
+  harness.fireTimers(3);
   assert.equal(harness.app.getState().camera.status, 'review');
   assert.equal(harness.streamTrack.stops, 1);
 });
@@ -777,7 +992,7 @@ test('countdown capture invalidates a pending upload image decode immediately', 
 
   assert.equal(harness.app.getState().currentPhoto, null);
   assert.equal(harness.app.getState().camera.status, 'countdown');
-  harness.fireTimers(5);
+  harness.fireTimers(3);
   assert.equal(harness.app.getState().camera.status, 'review');
   assert.equal(harness.streamTrack.stops, 1);
 });

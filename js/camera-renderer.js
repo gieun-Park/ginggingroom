@@ -38,6 +38,7 @@ export function drawLiveComposition({
   faces = [],
   preparedFrame = null,
   frame = null,
+  overlayScale = 1,
   overlayDrawer = drawFrameOverlays
 }) {
   context.clearRect(0, 0, canvasSize.width, canvasSize.height);
@@ -48,5 +49,5 @@ export function drawLiveComposition({
       .map(face => mapMirroredPlacementToCanvas(face, sourceSize, canvasSize))
       .filter(face => isPlacementVisible(face, canvasSize))
   );
-  overlayDrawer(context, preparedFrame, frame, placements);
+  overlayDrawer(context, preparedFrame, frame, placements, overlayScale);
 }

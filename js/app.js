@@ -1,4 +1,9 @@
 import { drawLiveComposition, drawSourceCover } from './camera-renderer.js';
+import {
+  applyCameraZoom,
+  CAMERA_ZOOM_OPTIONS,
+  getSupportedZoomOptions
+} from './camera-controls.js';
 import { createCameraSession } from './camera-session.js';
 import {
   createFaceDetectionService,
@@ -8,6 +13,14 @@ import { isPlacementVisible, mapPlacementToCanvas, sortPlacementsForDrawing } fr
 import { drawFrameOverlays, prepareFrameImage } from './frame-overlay.js';
 import { FRAMES, loadedFrames, preloadFrames } from './frames.js';
 import { createPhotoSession } from './photo-session.js';
+
+const DEFAULT_RENDERING_PROFILE = Object.freeze({ overlayScale: 1, maskScale: 1 });
+const MOBILE_CAMERA_RENDERING_PROFILE = Object.freeze({
+  overlayScale: 0.8,
+  maskScale: 1.25
+});
+const MOBILE_CAMERA_QUERY = '(max-width: 480px)';
+const TIMER_OPTIONS = Object.freeze([0, 3, 5, 7]);
 
 export function createApp({
   documentRef = document,
@@ -40,14 +53,30 @@ export function createApp({
     countdown: documentRef.getElementById('countdown'),
     timerBtn: documentRef.getElementById('timerBtn'),
     timerValue: documentRef.getElementById('timerValue'),
-    shutterBtn: documentRef.getElementById('shutterBtn')
+    shutterBtn: documentRef.getElementById('shutterBtn'),
+    zoomControls: documentRef.getElementById('zoomControls'),
+    zoom05Btn: documentRef.getElementById('zoom05Btn'),
+    zoom08Btn: documentRef.getElementById('zoom08Btn'),
+    zoom1Btn: documentRef.getElementById('zoom1Btn')
   };
+  const zoomButtonElements = [
+    elements.zoom05Btn,
+    elements.zoom08Btn,
+    elements.zoom1Btn
+  ];
+  const zoomButtons = CAMERA_ZOOM_OPTIONS.map((value, index) => ({
+    value,
+    element: zoomButtonElements[index]
+  }));
   const state = {
     currentPhoto: null,
     currentFrame: null,
     selectedFrameId: null,
     timerSeconds: 0,
-    liveFaces: []
+    liveFaces: [],
+    supportedZooms: [],
+    preferredZoom: null,
+    currentZoom: null
   };
   let uploadRequestGeneration = 0;
   let renderFrameId = null;
@@ -57,7 +86,11 @@ export function createApp({
   let playbackGeneration = 0;
   let playbackReady = false;
   let playbackReadyListener = null;
+  let activeVideoTrack = null;
   const preparedFrames = new Map();
+  const mobileCameraMedia = typeof windowRef.matchMedia === 'function'
+    ? windowRef.matchMedia(MOBILE_CAMERA_QUERY)
+    : null;
 
   const faceSession = createPhotoSession({
     detector,
@@ -92,11 +125,12 @@ export function createApp({
     setupEventListeners();
     framePreloader(frameId => {
       if (state.selectedFrameId !== frameId) return;
-      preparedFrames.delete(frameId);
+      clearPreparedFrameVariants(frameId);
       if (isCameraActive()) renderLiveFrame();
       else if (state.currentPhoto) renderPhoto();
     });
     initCanvas();
+    updateTimerControl();
     cameraSession.start();
   }
 
@@ -142,6 +176,9 @@ export function createApp({
     elements.retryDetectionBtn.addEventListener('click', retryDetection);
     elements.timerBtn.addEventListener('click', toggleTimer);
     elements.shutterBtn.addEventListener('click', startCapture);
+    zoomButtons.forEach(({ value, element }) => {
+      element.addEventListener('click', () => selectZoom(value));
+    });
     windowRef.addEventListener('beforeunload', destroy);
   }
 
@@ -152,6 +189,7 @@ export function createApp({
   }
 
   function invalidatePlayback() {
+    clearZoomStream();
     playbackGeneration += 1;
     playbackReady = false;
     clearPlaybackReadyListener();
@@ -162,6 +200,84 @@ export function createApp({
     const captureReady = camera.status === 'live' && playbackReady;
     elements.shutterBtn.disabled = !captureReady;
     elements.timerBtn.disabled = !captureReady;
+    zoomButtons.forEach(({ element }) => {
+      element.disabled = !captureReady;
+    });
+  }
+
+  function clearZoomStream() {
+    activeVideoTrack = null;
+    state.supportedZooms = [];
+    state.currentZoom = null;
+    elements.zoomControls.hidden = true;
+    zoomButtons.forEach(({ element }) => {
+      element.hidden = false;
+      element.disabled = true;
+      element.setAttribute('aria-pressed', 'false');
+    });
+  }
+
+  function updateZoomSelection() {
+    zoomButtons.forEach(({ value, element }) => {
+      element.hidden = !state.supportedZooms.includes(value);
+      element.setAttribute('aria-pressed', String(state.currentZoom === value));
+    });
+  }
+
+  async function configureZoom(stream, generation) {
+    const track = stream?.getVideoTracks?.()[0] ?? stream?.getTracks?.()[0] ?? null;
+    if (generation !== playbackGeneration || !playbackReady || !track) return;
+    activeVideoTrack = track;
+    state.supportedZooms = getSupportedZoomOptions(track.getCapabilities?.());
+    const reportedZoom = track.getSettings?.().zoom;
+    state.currentZoom = state.supportedZooms.includes(reportedZoom) ? reportedZoom : null;
+    updateZoomSelection();
+    elements.zoomControls.hidden = state.supportedZooms.length < 2;
+    updateCaptureControls();
+
+    if (
+      state.preferredZoom !== null
+      && state.supportedZooms.includes(state.preferredZoom)
+      && state.currentZoom !== state.preferredZoom
+    ) {
+      await selectZoom(state.preferredZoom, { generation, track });
+    }
+  }
+
+  async function selectZoom(
+    zoom,
+    {
+      generation = playbackGeneration,
+      track = activeVideoTrack
+    } = {}
+  ) {
+    if (
+      cameraSession.getState().status !== 'live'
+      || !playbackReady
+      || track !== activeVideoTrack
+      || !state.supportedZooms.includes(zoom)
+    ) return;
+
+    zoomButtons.forEach(({ element }) => {
+      element.disabled = true;
+    });
+    try {
+      await applyCameraZoom(track, zoom);
+    } catch {
+      if (generation !== playbackGeneration || track !== activeVideoTrack) return;
+      elements.zoomControls.hidden = true;
+      elements.cameraStatus.textContent = '이 기기에서는 카메라 배율을 바꿀 수 없어요.';
+      return;
+    } finally {
+      if (generation === playbackGeneration && track === activeVideoTrack) {
+        updateCaptureControls();
+      }
+    }
+
+    if (generation !== playbackGeneration || track !== activeVideoTrack) return;
+    state.currentZoom = zoom;
+    state.preferredZoom = zoom;
+    updateZoomSelection();
   }
 
   function exposeCameraFallback() {
@@ -194,6 +310,7 @@ export function createApp({
     playbackReady = true;
     elements.cameraStatus.textContent = '카메라 준비 완료';
     updateCaptureControls();
+    void configureZoom(elements.video.srcObject, generation);
     startLiveLoop();
   }
 
@@ -246,17 +363,31 @@ export function createApp({
     await faceSession.analyze(image);
   }
 
-  function getPreparedFrame() {
+  function getCameraRenderingProfile() {
+    return mobileCameraMedia?.matches
+      ? MOBILE_CAMERA_RENDERING_PROFILE
+      : DEFAULT_RENDERING_PROFILE;
+  }
+
+  function clearPreparedFrameVariants(frameId) {
+    const prefix = `${frameId}:`;
+    for (const cacheKey of preparedFrames.keys()) {
+      if (cacheKey.startsWith(prefix)) preparedFrames.delete(cacheKey);
+    }
+  }
+
+  function getPreparedFrame(maskScale = 1) {
     if (!state.currentFrame) return null;
     const frameImage = frameImages.get(state.currentFrame.id);
     if (!frameImage) return null;
-    if (!preparedFrames.has(state.currentFrame.id)) {
+    const cacheKey = `${state.currentFrame.id}:${maskScale}`;
+    if (!preparedFrames.has(cacheKey)) {
       preparedFrames.set(
-        state.currentFrame.id,
-        framePreparer(frameImage, state.currentFrame)
+        cacheKey,
+        framePreparer(frameImage, state.currentFrame, { maskScale })
       );
     }
-    return preparedFrames.get(state.currentFrame.id);
+    return preparedFrames.get(cacheKey);
   }
 
   function renderPhoto() {
@@ -270,14 +401,20 @@ export function createApp({
     sourceDrawer(context, state.currentPhoto, imageSize, canvasSize);
 
     const analysis = faceSession.getState();
-    const preparedFrame = getPreparedFrame();
+    const preparedFrame = getPreparedFrame(DEFAULT_RENDERING_PROFILE.maskScale);
     if (analysis.status !== 'ready' || !preparedFrame || !state.currentFrame) return;
     const placements = sortPlacementsForDrawing(
       analysis.faces
         .map(face => mapPlacementToCanvas(face, imageSize, canvasSize))
         .filter(face => isPlacementVisible(face, canvasSize))
     );
-    overlayDrawer(context, preparedFrame, state.currentFrame, placements);
+    overlayDrawer(
+      context,
+      preparedFrame,
+      state.currentFrame,
+      placements,
+      DEFAULT_RENDERING_PROFILE.overlayScale
+    );
   }
 
   function renderLiveFrame() {
@@ -286,14 +423,16 @@ export function createApp({
       height: elements.video.videoHeight
     };
     if (!sourceSize.width || !sourceSize.height) return;
+    const renderingProfile = getCameraRenderingProfile();
     liveCompositionDrawer({
       context,
       source: elements.video,
       sourceSize,
       canvasSize: { width: canvas.width, height: canvas.height },
       faces: state.liveFaces,
-      preparedFrame: getPreparedFrame(),
+      preparedFrame: getPreparedFrame(renderingProfile.maskScale),
       frame: state.currentFrame,
+      overlayScale: renderingProfile.overlayScale,
       overlayDrawer
     });
   }
@@ -373,9 +512,16 @@ export function createApp({
 
   function toggleTimer() {
     if (cameraSession.getState().status !== 'live' || !playbackReady) return;
-    state.timerSeconds = state.timerSeconds === 5 ? 0 : 5;
-    elements.timerBtn.setAttribute('aria-pressed', String(state.timerSeconds === 5));
-    elements.timerValue.textContent = state.timerSeconds === 5 ? '5초' : '끔';
+    const currentIndex = TIMER_OPTIONS.indexOf(state.timerSeconds);
+    state.timerSeconds = TIMER_OPTIONS[(currentIndex + 1) % TIMER_OPTIONS.length];
+    updateTimerControl();
+  }
+
+  function updateTimerControl() {
+    const label = state.timerSeconds === 0 ? '끔' : `${state.timerSeconds}초`;
+    elements.timerValue.textContent = label;
+    elements.timerBtn.setAttribute('aria-label', `타이머: ${label}`);
+    elements.timerBtn.setAttribute('aria-pressed', String(state.timerSeconds !== 0));
   }
 
   function startCapture() {

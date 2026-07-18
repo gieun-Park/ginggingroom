@@ -1,4 +1,7 @@
-export function prepareFrameImage(frameImage, frame, createCanvas = () => document.createElement('canvas')) {
+export function prepareFrameImage(frameImage, frame, {
+  createCanvas = () => document.createElement('canvas'),
+  maskScale = 1
+} = {}) {
   const canvas = createCanvas();
   canvas.width = frameImage.naturalWidth;
   canvas.height = frameImage.naturalHeight;
@@ -10,8 +13,8 @@ export function prepareFrameImage(frameImage, frame, createCanvas = () => docume
     context.ellipse(
       anchor.centerX * canvas.width,
       anchor.centerY * canvas.height,
-      anchor.width * canvas.width / 2,
-      anchor.height * canvas.height / 2,
+      anchor.width * maskScale * canvas.width / 2,
+      anchor.height * maskScale * canvas.height / 2,
       0,
       0,
       Math.PI * 2
@@ -22,17 +25,24 @@ export function prepareFrameImage(frameImage, frame, createCanvas = () => docume
   return canvas;
 }
 
-export function drawFrameOverlays(context, preparedFrame, frame, placements) {
+export function drawFrameOverlays(
+  context,
+  preparedFrame,
+  frame,
+  placements,
+  overlayScale = 1
+) {
   const anchorX = frame.faceAnchor.centerX * preparedFrame.width;
   const anchorY = frame.faceAnchor.centerY * preparedFrame.height;
   const anchorWidth = frame.faceAnchor.width * preparedFrame.width;
   const anchorHeight = frame.faceAnchor.height * preparedFrame.height;
 
   placements.forEach(placement => {
-    const scale = Math.max(
+    const fitScale = Math.max(
       placement.width * frame.fitPadding / anchorWidth,
       placement.height * frame.fitPadding / anchorHeight
     );
+    const scale = fitScale * overlayScale;
     context.save();
     context.translate(placement.centerX, placement.centerY);
     context.rotate(placement.rotation);

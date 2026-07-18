@@ -17,6 +17,11 @@
             <section class="camera-card" aria-label="깅깅룸 카메라">
                 <div class="camera-stage">
                     <canvas id="canvas" width="600" height="750"></canvas>
+                    <div id="zoomControls" class="camera-zoom" role="group" aria-label="카메라 배율" hidden>
+                        <button id="zoom05Btn" class="zoom-btn" type="button" aria-pressed="false">0.5x</button>
+                        <button id="zoom08Btn" class="zoom-btn" type="button" aria-pressed="false">0.8x</button>
+                        <button id="zoom1Btn" class="zoom-btn" type="button" aria-pressed="false">1x</button>
+                    </div>
                     <div id="countdown" class="countdown" role="status" aria-live="polite" hidden></div>
                     <p id="cameraStatus" class="camera-status" role="status" aria-live="polite"></p>
                 </div>
@@ -43,7 +48,7 @@
                     <button id="shutterBtn" class="shutter-btn" type="button" aria-label="사진 촬영">
                         <span></span>
                     </button>
-                    <button id="timerBtn" class="control-action timer-btn" type="button" aria-label="5초 타이머" aria-pressed="false">
+                    <button id="timerBtn" class="control-action timer-btn" type="button" aria-label="타이머: 끔" aria-pressed="false">
                         <span aria-hidden="true">◷</span>
                         <small id="timerValue">끔</small>
                     </button>

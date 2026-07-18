@@ -91,6 +91,7 @@ header p {
 
 .countdown {
     position: absolute;
+    z-index: 4;
     inset: 0;
     display: grid;
     place-items: center;
@@ -108,12 +109,45 @@ header p {
 
 .camera-status {
     position: absolute;
+    z-index: 3;
+    top: 18px;
     right: 18px;
-    bottom: 18px;
+    bottom: auto;
     left: 18px;
     color: #fff;
     text-align: center;
     text-shadow: 0 2px 8px #000;
+}
+
+.camera-zoom {
+    position: absolute;
+    z-index: 2;
+    left: 50%;
+    bottom: 16px;
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(17, 13, 17, 0.58);
+    backdrop-filter: blur(10px);
+    transform: translateX(-50%);
+}
+
+.zoom-btn {
+    min-width: 44px;
+    min-height: 44px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #fff;
+    font-size: 0.82rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.zoom-btn[aria-pressed="true"] {
+    background: #fff;
+    color: #c41e3a;
 }
 
 .face-feedback {
@@ -306,6 +340,7 @@ button:disabled,
 @media (hover: hover) {
     .frame-item:hover,
     .shutter-btn:hover,
+    .zoom-btn:hover,
     .btn-primary:hover,
     .btn-secondary:hover {
         transform: translateY(-2px);
@@ -340,6 +375,10 @@ button:disabled,
 
     .camera-stage {
         border-radius: 18px;
+    }
+
+    .camera-zoom {
+        bottom: 12px;
     }
 }
 

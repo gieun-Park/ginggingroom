@@ -35,7 +35,7 @@ test('erases every configured face placeholder in an offscreen canvas', () => {
   const prepared = prepareFrameImage(
     frameImage,
     frame,
-    () => canvas
+    { createCanvas: () => canvas }
   );
   assert.equal(prepared, canvas);
   assert.deepEqual(context.calls, [
@@ -48,6 +48,25 @@ test('erases every configured face placeholder in an offscreen canvas', () => {
     ['fill', 'destination-out']
   ]);
   assert.equal(context.globalCompositeOperation, 'source-over');
+});
+
+test('expands face masks independently from the prepared bitmap size', () => {
+  const context = makeContext();
+  const canvas = { width: 0, height: 0, getContext: () => context };
+  const frameImage = { naturalWidth: 480, naturalHeight: 480 };
+
+  prepareFrameImage(frameImage, frame, {
+    createCanvas: () => canvas,
+    maskScale: 1.25
+  });
+
+  assert.deepEqual(
+    context.calls.filter(call => call[0] === 'ellipse'),
+    [
+      ['ellipse', 240, 192, 60, 60, 0, 0, Math.PI * 2],
+      ['ellipse', 336, 192, 30, 30, 0, 0, Math.PI * 2]
+    ]
+  );
 });
 
 test('draws one aspect-preserving transformed frame for every placement', () => {
@@ -84,4 +103,31 @@ test('draws one aspect-preserving transformed frame for every placement', () => 
     ['drawImage', prepared, -240, -192],
     ['restore']
   ]);
+});
+
+test('scales costume artwork without moving the face anchor', () => {
+  const context = makeContext();
+  const prepared = { width: 480, height: 480 };
+  const placement = {
+    centerX: 100,
+    centerY: 120,
+    width: 40,
+    height: 45,
+    rotation: 0.1
+  };
+  const baseScale = Math.max(
+    placement.width * frame.fitPadding / (frame.faceAnchor.width * prepared.width),
+    placement.height * frame.fitPadding / (frame.faceAnchor.height * prepared.height)
+  );
+
+  drawFrameOverlays(context, prepared, frame, [placement], 0.8);
+
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'translate'),
+    ['translate', 100, 120]
+  );
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'scale'),
+    ['scale', baseScale * 0.8, baseScale * 0.8]
+  );
 });
