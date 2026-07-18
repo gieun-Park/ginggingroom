@@ -53,6 +53,7 @@ test('erases every configured face placeholder in an offscreen canvas', () => {
     { createCanvas: () => canvas }
   );
   assert.equal(prepared, canvas);
+  assert.equal(prepared.maskScale, 1);
   assert.deepEqual(context.calls, [
     ['drawImage', frameImage, 0, 0, 480, 480],
     ['beginPath'],
@@ -65,21 +66,42 @@ test('erases every configured face placeholder in an offscreen canvas', () => {
   assert.equal(context.globalCompositeOperation, 'source-over');
 });
 
-test('expands face masks independently from the prepared bitmap size', () => {
+test('expands face masks and records the resolved mask scale', () => {
   const context = makeContext();
   const canvas = { width: 0, height: 0, getContext: () => context };
   const frameImage = { naturalWidth: 480, naturalHeight: 480 };
 
-  prepareFrameImage(frameImage, frame, {
+  const prepared = prepareFrameImage(frameImage, frame, {
     createCanvas: () => canvas,
     maskScale: 1.25
   });
 
+  assert.equal(prepared.maskScale, 1.25);
   assert.deepEqual(
     context.calls.filter(call => call[0] === 'ellipse'),
     [
       ['ellipse', 240, 192, 60, 60, 0, 0, Math.PI * 2],
       ['ellipse', 336, 192, 30, 30, 0, 0, Math.PI * 2]
+    ]
+  );
+});
+
+test('normalizes an invalid prepared mask scale to one', () => {
+  const context = makeContext();
+  const canvas = { width: 0, height: 0, getContext: () => context };
+  const frameImage = { naturalWidth: 480, naturalHeight: 480 };
+
+  const prepared = prepareFrameImage(frameImage, frame, {
+    createCanvas: () => canvas,
+    maskScale: Number.NaN
+  });
+
+  assert.equal(prepared.maskScale, 1);
+  assert.deepEqual(
+    context.calls.filter(call => call[0] === 'ellipse'),
+    [
+      ['ellipse', 240, 192, 48, 48, 0, 0, Math.PI * 2],
+      ['ellipse', 336, 192, 24, 24, 0, 0, Math.PI * 2]
     ]
   );
 });

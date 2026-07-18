@@ -3,8 +3,10 @@ export function prepareFrameImage(frameImage, frame, {
   maskScale = 1
 } = {}) {
   const canvas = createCanvas();
+  const resolvedMaskScale = isFinitePositive(maskScale) ? maskScale : 1;
   canvas.width = frameImage.naturalWidth;
   canvas.height = frameImage.naturalHeight;
+  canvas.maskScale = resolvedMaskScale;
   const context = canvas.getContext('2d');
   context.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
   context.globalCompositeOperation = 'destination-out';
@@ -13,8 +15,8 @@ export function prepareFrameImage(frameImage, frame, {
     context.ellipse(
       anchor.centerX * canvas.width,
       anchor.centerY * canvas.height,
-      anchor.width * maskScale * canvas.width / 2,
-      anchor.height * maskScale * canvas.height / 2,
+      anchor.width * resolvedMaskScale * canvas.width / 2,
+      anchor.height * resolvedMaskScale * canvas.height / 2,
       0,
       0,
       Math.PI * 2
