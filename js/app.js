@@ -364,9 +364,16 @@ export function createApp({
   }
 
   function getCameraRenderingProfile() {
-    return mobileCameraMedia?.matches
+    const isMobileCamera = Boolean(mobileCameraMedia?.matches);
+    const baseProfile = isMobileCamera
       ? MOBILE_CAMERA_RENDERING_PROFILE
       : DEFAULT_RENDERING_PROFILE;
+    return {
+      overlayScale: baseProfile.overlayScale,
+      maskScale: isMobileCamera
+        ? (state.currentFrame?.mobileMaskScale ?? baseProfile.maskScale)
+        : baseProfile.maskScale
+    };
   }
 
   function clearPreparedFrameVariants(frameId) {

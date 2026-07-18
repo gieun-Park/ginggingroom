@@ -82,6 +82,7 @@ function makeAppHarness({
   zoomSettings = {},
   zoomConstraintError = null,
   zoomConstraintPromise = null,
+  availableFrames = FRAMES.slice(0, 2),
   windowRef: windowOverrides = {}
 } = {}) {
   const ids = [
@@ -212,7 +213,7 @@ function makeAppHarness({
   };
 
   const frameImages = new Map(
-    FRAMES.slice(0, 2).map(frame => [frame.id, makeLoadedImage(480, 480)])
+    availableFrames.map(frame => [frame.id, makeLoadedImage(480, 480)])
   );
   const photoDraws = [];
   const liveDraws = [];
@@ -610,6 +611,25 @@ test('uses the balanced 80 percent frame profile only for mobile camera composit
 
   harness.elements.shutterBtn.listeners.click();
   assert.equal(harness.liveDraws.at(-1).overlayScale, 0.8);
+});
+
+test('uses frame 22 mobile mask override without changing frame scale', async () => {
+  const frame = FRAMES.find(({ id }) => id === 'frame-22');
+  const harness = makeAppHarness({
+    availableFrames: [frame],
+    liveFaces: [{ centerX: 0.5, centerY: 0.5, width: 0.2, height: 0.3, rotation: 0 }],
+    windowRef: {
+      matchMedia: query => ({ matches: query === '(max-width: 480px)' })
+    }
+  });
+  harness.app.init();
+  await harness.flushCamera();
+  harness.elements.frameGrid.children[21].listeners.click();
+  await harness.runAnimationFrame(100);
+
+  assert.equal(harness.liveDraws.at(-1).overlayScale, 0.8);
+  assert.equal(harness.liveDraws.at(-1).preparedFrame.maskScale, 1);
+  assert.equal(harness.framePrepareCalls.at(-1).options.maskScale, 1);
 });
 
 test('keeps uploaded photos at full frame scale on mobile viewports', async () => {
