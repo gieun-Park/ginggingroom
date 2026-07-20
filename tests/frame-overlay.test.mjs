@@ -51,7 +51,7 @@ const faceFitPairedFrame = {
   }
 };
 
-test('erases every configured face placeholder in an offscreen canvas', () => {
+test('erases every configured face placeholder with a 1.5 pixel edge cleanup', () => {
   const context = makeContext();
   const canvas = { width: 0, height: 0, getContext: () => context };
   const frameImage = { naturalWidth: 480, naturalHeight: 480 };
@@ -64,16 +64,16 @@ test('erases every configured face placeholder in an offscreen canvas', () => {
   assert.deepEqual(context.calls, [
     ['drawImage', frameImage, 0, 0, 480, 480],
     ['beginPath'],
-    ['ellipse', 240, 192, 48, 48, 0, 0, Math.PI * 2],
+    ['ellipse', 240, 192, 49.5, 49.5, 0, 0, Math.PI * 2],
     ['fill', 'destination-out'],
     ['beginPath'],
-    ['ellipse', 336, 192, 24, 24, 0, 0, Math.PI * 2],
+    ['ellipse', 336, 192, 25.5, 25.5, 0, 0, Math.PI * 2],
     ['fill', 'destination-out']
   ]);
   assert.equal(context.globalCompositeOperation, 'source-over');
 });
 
-test('expands face masks independently from the prepared bitmap size', () => {
+test('composes mask scaling and edge cleanup independently', () => {
   const context = makeContext();
   const canvas = { width: 0, height: 0, getContext: () => context };
   const frameImage = { naturalWidth: 480, naturalHeight: 480 };
@@ -86,13 +86,13 @@ test('expands face masks independently from the prepared bitmap size', () => {
   assert.deepEqual(
     context.calls.filter(call => call[0] === 'ellipse'),
     [
-      ['ellipse', 240, 192, 60, 60, 0, 0, Math.PI * 2],
-      ['ellipse', 336, 192, 30, 30, 0, 0, Math.PI * 2]
+      ['ellipse', 240, 192, 61.5, 61.5, 0, 0, Math.PI * 2],
+      ['ellipse', 336, 192, 31.5, 31.5, 0, 0, Math.PI * 2]
     ]
   );
 });
 
-test('normalizes an invalid prepared mask scale to one', () => {
+test('normalizes an invalid mask scale before applying edge cleanup', () => {
   const context = makeContext();
   const canvas = { width: 0, height: 0, getContext: () => context };
   const frameImage = { naturalWidth: 480, naturalHeight: 480 };
@@ -105,8 +105,8 @@ test('normalizes an invalid prepared mask scale to one', () => {
   assert.deepEqual(
     context.calls.filter(call => call[0] === 'ellipse'),
     [
-      ['ellipse', 240, 192, 48, 48, 0, 0, Math.PI * 2],
-      ['ellipse', 336, 192, 24, 24, 0, 0, Math.PI * 2]
+      ['ellipse', 240, 192, 49.5, 49.5, 0, 0, Math.PI * 2],
+      ['ellipse', 336, 192, 25.5, 25.5, 0, 0, Math.PI * 2]
     ]
   );
 });

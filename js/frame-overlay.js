@@ -1,3 +1,5 @@
+const FACE_MASK_EDGE_CLEANUP_PX = 1.5;
+
 export function prepareFrameImage(frameImage, frame, {
   createCanvas = () => document.createElement('canvas'),
   maskScale = 1
@@ -14,8 +16,10 @@ export function prepareFrameImage(frameImage, frame, {
     context.ellipse(
       anchor.centerX * canvas.width,
       anchor.centerY * canvas.height,
-      anchor.width * resolvedMaskScale * canvas.width / 2,
-      anchor.height * resolvedMaskScale * canvas.height / 2,
+      anchor.width * resolvedMaskScale * canvas.width / 2
+        + FACE_MASK_EDGE_CLEANUP_PX,
+      anchor.height * resolvedMaskScale * canvas.height / 2
+        + FACE_MASK_EDGE_CLEANUP_PX,
       0,
       0,
       Math.PI * 2
