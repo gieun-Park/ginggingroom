@@ -47,7 +47,7 @@
 
 **Interfaces:**
 - Consumes: the twelve supplied opaque PNG files and Node's built-in `fs` and `zlib` modules.
-- Produces: native-size RGBA PNGs whose corner and one calibrated face-opening sample have alpha `0`, while one artwork sample has alpha `255`.
+- Produces: native-size RGBA PNGs whose corner and one calibrated face-opening sample are `(0,0,0,0)`, while one artwork sample has alpha `255`.
 
 - [ ] **Step 1: Write the failing PNG alpha contract test**
 
@@ -124,6 +124,10 @@ function decodeRgbaPng(path) {
   return {
     width: header.width,
     height: header.height,
+    rgbaAt(x, y) {
+      const offset = (y * header.width + x) * bytesPerPixel;
+      return [...pixels.subarray(offset, offset + bytesPerPixel)];
+    },
     alphaAt(x, y) {
       return pixels[(y * header.width + x) * bytesPerPixel + 3];
     }
@@ -153,10 +157,15 @@ test('ships cleaned RGBA assets for frames 38 through 49', () => {
   FRAME_ASSETS.forEach(({ id, size, face, art }) => {
     const png = decodeRgbaPng(`assets/frames/frame_${id}.png`);
     assert.deepEqual([png.width, png.height], size, `frame-${id} size`);
-    assert.equal(png.alphaAt(0, 0), 0, `frame-${id} exterior`);
-    assert.equal(png.alphaAt(...face), 0, `frame-${id} face opening`);
+    assert.deepEqual(png.rgbaAt(0, 0), [0, 0, 0, 0], `frame-${id} exterior`);
+    assert.deepEqual(png.rgbaAt(...face), [0, 0, 0, 0], `frame-${id} face opening`);
     assert.equal(png.alphaAt(...art), 255, `frame-${id} artwork`);
   });
+});
+
+test('preserves the neutral panda hood in frame 43', () => {
+  const png = decodeRgbaPng('assets/frames/frame_43.png');
+  assert.equal(png.alphaAt(80, 70), 255);
 });
 ```
 
@@ -168,7 +177,7 @@ Expected: FAIL because every supplied asset has PNG color type `2` (RGB without 
 
 - [ ] **Step 3: Apply deterministic local alpha cleanup**
 
-Use a temporary Pillow script, not a runtime dependency. Preserve all RGB bytes and change only alpha. Treat a pixel as checkerboard when `max(rgb) - min(rgb) <= 10` and `min(rgb) >= 180`. Flood from neutral edge pixels for the exterior and from the configured face center within its opening box for the enclosed component. Expand each removal mask by at most two pixels only where `max(rgb) - min(rgb) <= 18` and `min(rgb) >= 150`.
+Use a temporary Pillow script, not a runtime dependency. Preserve every visible artwork RGB value, and set removed pixels to `(0,0,0,0)` so transparent checkerboard RGB cannot bleed during scaling. Treat a pixel as checkerboard when `max(rgb) - min(rgb) <= 10` and `min(rgb) >= 180`; use `<= 3` for frame 43 so its neutral panda hood remains protected. Flood from neutral edge pixels for the exterior and from the configured face center within its opening box for the enclosed component. Expand each removal mask by at most two pixels only where `max(rgb) - min(rgb) <= 18` and `min(rgb) >= 150`.
 
 Use these opening boxes in native pixels:
 
@@ -189,7 +198,7 @@ OPENINGS = {
 }
 ```
 
-Create `/tmp/clean_frames_38_49.py` with the following complete processing logic. The script asserts each native size before saving, preserves RGB values, changes only alpha, and saves non-interlaced RGBA PNGs:
+Create `/tmp/clean_frames_38_49.py` with the following complete processing logic. The script asserts each native size before saving, preserves visible RGB values, zeros removed pixels, and saves non-interlaced RGBA PNGs:
 
 ```python
 from collections import deque
@@ -211,13 +220,13 @@ OPENINGS = {
     48: (95, 109, 202, 166), 49: (69, 90, 175, 164),
 }
 
-def is_checker(pixel):
-    return max(pixel) - min(pixel) <= 10 and min(pixel) >= 180
+def is_checker(pixel, spread):
+    return max(pixel) - min(pixel) <= spread and min(pixel) >= 180
 
 def is_neutral_fringe(pixel):
     return max(pixel) - min(pixel) <= 18 and min(pixel) >= 150
 
-def flood(rgb, seeds, bounds):
+def flood(rgb, seeds, bounds, checker_spread):
     left, top, right, bottom = bounds
     queue = deque(seeds)
     visited = set()
@@ -225,7 +234,7 @@ def flood(rgb, seeds, bounds):
         x, y = queue.popleft()
         if (x, y) in visited or not (left <= x < right and top <= y < bottom):
             continue
-        if not is_checker(rgb.getpixel((x, y))):
+        if not is_checker(rgb.getpixel((x, y)), checker_spread):
             continue
         visited.add((x, y))
         queue.extend(((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)))
@@ -236,16 +245,22 @@ for number, expected_size in SIZES.items():
     rgb = Image.open(path).convert('RGB')
     assert rgb.size == expected_size, (number, rgb.size, expected_size)
     width, height = rgb.size
+    checker_spread = 3 if number == 43 else 10
     edge_seeds = (
         [(x, 0) for x in range(width)]
         + [(x, height - 1) for x in range(width)]
         + [(0, y) for y in range(height)]
         + [(width - 1, y) for y in range(height)]
     )
-    removed = flood(rgb, edge_seeds, (0, 0, width, height))
+    removed = flood(rgb, edge_seeds, (0, 0, width, height), checker_spread)
     left, top, right, bottom = OPENINGS[number]
     center = ((left + right) // 2, (top + bottom) // 2)
-    removed.update(flood(rgb, [center], (left, top, right, bottom)))
+    removed.update(flood(
+        rgb,
+        [center],
+        (left, top, right, bottom),
+        checker_spread
+    ))
 
     base_mask = Image.new('L', rgb.size, 0)
     base_pixels = base_mask.load()
@@ -264,6 +279,11 @@ for number, expected_size in SIZES.items():
 
     output = rgb.convert('RGBA')
     output.putalpha(alpha)
+    output_pixels = output.load()
+    for y in range(height):
+        for x in range(width):
+            if alpha_pixels[x, y] == 0:
+                output_pixels[x, y] = (0, 0, 0, 0)
     output.save(path, format='PNG', compress_level=9, interlace=False)
 ```
 
