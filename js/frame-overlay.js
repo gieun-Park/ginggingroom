@@ -314,6 +314,33 @@ function drawContainedSlots(
   return true;
 }
 
+function drawCoverFrame(context, preparedFrame, frame) {
+  if (frame.layout?.mode !== 'cover') return false;
+  const canvas = context.canvas;
+  if (
+    !canvas
+    || !isFinitePositive(canvas.width)
+    || !isFinitePositive(canvas.height)
+    || !isFinitePositive(preparedFrame.width)
+    || !isFinitePositive(preparedFrame.height)
+  ) return true;
+
+  const scale = Math.max(
+    canvas.width / preparedFrame.width,
+    canvas.height / preparedFrame.height
+  );
+  context.save();
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.scale(scale, scale);
+  context.drawImage(
+    preparedFrame,
+    -preparedFrame.width / 2,
+    -preparedFrame.height / 2
+  );
+  context.restore();
+  return true;
+}
+
 function drawPairedFrame(context, preparedFrame, frame, placements, overlayScale) {
   const canvas = context.canvas;
   const layout = frame.layout;
@@ -390,6 +417,8 @@ export function drawFrameOverlays(
   overlayScale = 1,
   options = {}
 ) {
+  if (drawCoverFrame(context, preparedFrame, frame)) return;
+
   if (
     frame.layout?.mode === 'paired'
     && drawPairedFrame(context, preparedFrame, frame, placements, overlayScale)

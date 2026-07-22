@@ -98,6 +98,11 @@ const containFrame = {
   }
 };
 
+const coverFrame = {
+  ...frame,
+  layout: { mode: 'cover' }
+};
+
 test('erases every configured face placeholder with a 1.5 pixel edge cleanup', () => {
   const context = makeContext();
   const canvas = { width: 0, height: 0, getContext: () => context };
@@ -440,6 +445,61 @@ test('assigns remaining faces from left to right and caps them at the slot count
     context.calls.filter(call => call[0] === 'drawImage' && call[1] === prepared).length,
     1
   );
+});
+
+test('covers the canvas once without using face placements', () => {
+  const context = makeContext();
+  const prepared = { width: 480, height: 480 };
+  const placements = [
+    { centerX: 100, centerY: 200, width: 80, height: 90, rotation: 0.4 },
+    { centerX: 500, centerY: 300, width: 70, height: 85, rotation: -0.2 }
+  ];
+
+  drawFrameOverlays(context, prepared, coverFrame, placements, 0.5);
+
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'translate'),
+    ['translate', 300, 375]
+  );
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'scale'),
+    ['scale', 1.5625, 1.5625]
+  );
+  assert.deepEqual(
+    context.calls.filter(call => call[0] === 'drawImage'),
+    [['drawImage', prepared, -240, -240]]
+  );
+  assert.equal(context.calls.some(call => call[0] === 'rotate'), false);
+});
+
+test('uses portrait cover sizing even when no face is detected', () => {
+  const context = makeContext();
+  const prepared = { width: 1080, height: 1920 };
+
+  drawFrameOverlays(context, prepared, coverFrame, [], 0.5);
+
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'scale'),
+    ['scale', 600 / 1080, 600 / 1080]
+  );
+  assert.equal(
+    context.calls.filter(call => call[0] === 'drawImage').length,
+    1
+  );
+});
+
+test('skips an invalid cover frame without falling through', () => {
+  const context = makeContext();
+
+  drawFrameOverlays(
+    context,
+    { width: 0, height: 480 },
+    coverFrame,
+    [{ centerX: 300, centerY: 375, width: 100, height: 120, rotation: 0.3 }]
+  );
+
+  assert.equal(context.calls.some(call => call[0] === 'drawImage'), false);
+  assert.equal(context.calls.some(call => call[0] === 'rotate'), false);
 });
 
 test('contains the complete portrait frame and clips its face crop to a rectangle', () => {
