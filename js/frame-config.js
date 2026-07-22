@@ -1,19 +1,29 @@
-function anchorFromBox([left, top, right, bottom]) {
+function anchorFromBox(
+  [left, top, right, bottom],
+  [sourceWidth, sourceHeight] = [480, 480]
+) {
   return {
-    centerX: (left + right) / 960,
-    centerY: (top + bottom) / 960,
-    width: (right - left) / 480,
-    height: (bottom - top) / 480
+    centerX: (left + right) / (sourceWidth * 2),
+    centerY: (top + bottom) / (sourceHeight * 2),
+    width: (right - left) / sourceWidth,
+    height: (bottom - top) / sourceHeight
   };
 }
 
-function boundsFromBox([left, top, right, bottom]) {
+function boundsFromBox(
+  [left, top, right, bottom],
+  [sourceWidth, sourceHeight] = [480, 480]
+) {
   return {
-    left: left / 480,
-    top: top / 480,
-    right: right / 480,
-    bottom: bottom / 480
+    left: left / sourceWidth,
+    top: top / sourceHeight,
+    right: right / sourceWidth,
+    bottom: bottom / sourceHeight
   };
+}
+
+function slotsFromBoxes(boxes, sourceSize = [480, 480], shape = 'ellipse') {
+  return boxes.map(box => ({ ...anchorFromBox(box, sourceSize), shape }));
 }
 
 const DEFINITIONS = [
@@ -55,7 +65,67 @@ const DEFINITIONS = [
         scaleMode: 'face'
       }
     }],
-  ['frame-26', '프레임 26', 'frame_26.png', [210, 178, 269, 239]]
+  ['frame-26', '프레임 26', 'frame_26.png', [210, 178, 269, 239]],
+  ['frame-27', '프레임 27', 'frame_27.png', [138, 176, 337, 402]],
+  ['frame-28', '프레임 28', 'frame_28.png',
+    [193, 119, 285, 211],
+    [[193, 119, 285, 211], [193, 23, 281, 105], [197, 216, 286, 307]],
+    {
+      layout: {
+        mode: 'anchored',
+        slots: slotsFromBoxes([
+          [193, 119, 285, 211],
+          [193, 23, 281, 105],
+          [197, 216, 286, 307]
+        ])
+      }
+    }],
+  ['frame-29', '프레임 29', 'frame_29.png',
+    [159, 148, 294, 245],
+    [[159, 148, 294, 245], [105, 300, 199, 366], [270, 316, 355, 391]],
+    {
+      layout: {
+        mode: 'anchored',
+        slots: slotsFromBoxes([
+          [159, 148, 294, 245],
+          [105, 300, 199, 366],
+          [270, 316, 355, 391]
+        ])
+      }
+    }],
+  ['frame-30', '프레임 30', 'frame_30.png', [85, 180, 315, 343]],
+  ['frame-31', '프레임 31', 'frame_31.png', [62, 165, 418, 414]],
+  ['frame-32', '프레임 32', 'frame_32.png', [117, 134, 352, 314]],
+  ['frame-33', '프레임 33', 'frame_33.png',
+    [198, 660, 893, 1110],
+    [],
+    {
+      layout: {
+        mode: 'contain',
+        slots: slotsFromBoxes([[198, 660, 893, 1110]], [1080, 1920], 'rect')
+      }
+    },
+    [1080, 1920]],
+  ['frame-34', '프레임 34', 'frame_34.png',
+    [58, 173, 157, 248],
+    undefined,
+    {},
+    [216, 350]],
+  ['frame-35', '프레임 35', 'frame_35.png',
+    [37, 165, 159, 242],
+    undefined,
+    {},
+    [204, 340]],
+  ['frame-36', '프레임 36', 'frame_36.png',
+    [69, 105, 170, 193],
+    undefined,
+    {},
+    [236, 296]],
+  ['frame-37', '프레임 37', 'frame_37.png',
+    [46, 150, 156, 229],
+    undefined,
+    {},
+    [217, 340]]
 ];
 
 export const FRAMES = DEFINITIONS.map(([
@@ -64,13 +134,14 @@ export const FRAMES = DEFINITIONS.map(([
   filename,
   faceBox,
   maskBoxes = [faceBox],
-  rendering = {}
+  rendering = {},
+  sourceSize = [480, 480]
 ]) => ({
   id,
   name,
   src: `assets/frames/${filename}`,
-  faceAnchor: anchorFromBox(faceBox),
-  maskAnchors: maskBoxes.map(anchorFromBox),
+  faceAnchor: anchorFromBox(faceBox, sourceSize),
+  maskAnchors: maskBoxes.map(box => anchorFromBox(box, sourceSize)),
   fitPadding: 1.08,
   ...rendering
 }));
