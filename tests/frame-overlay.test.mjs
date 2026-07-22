@@ -10,6 +10,9 @@ function makeContext({ width = 600, height = 750 } = {}) {
     globalCompositeOperation: 'source-over',
     beginPath() { calls.push(['beginPath']); },
     ellipse(...args) { calls.push(['ellipse', ...args]); },
+    rect(...args) { calls.push(['rect', ...args]); },
+    clip() { calls.push(['clip']); },
+    clearRect(...args) { calls.push(['clearRect', ...args]); },
     fill() { calls.push(['fill', this.globalCompositeOperation]); },
     drawImage(...args) { calls.push(['drawImage', ...args]); },
     save() { calls.push(['save']); },
@@ -17,6 +20,24 @@ function makeContext({ width = 600, height = 750 } = {}) {
     translate(...args) { calls.push(['translate', ...args]); },
     rotate(...args) { calls.push(['rotate', ...args]); },
     scale(...args) { calls.push(['scale', ...args]); }
+  };
+}
+
+function makeCanvasFactory() {
+  const entries = [];
+  return {
+    entries,
+    createCanvas() {
+      const context = makeContext({ width: 0, height: 0 });
+      const canvas = {
+        width: 0,
+        height: 0,
+        getContext: () => context
+      };
+      context.canvas = canvas;
+      entries.push({ canvas, context });
+      return canvas;
+    }
   };
 }
 
@@ -48,6 +69,32 @@ const faceFitPairedFrame = {
   layout: {
     ...pairedFrame.layout,
     scaleMode: 'face'
+  }
+};
+
+const anchoredFrame = {
+  faceAnchor: { centerX: 0.5, centerY: 0.45, width: 0.2, height: 0.2 },
+  maskAnchors: [],
+  fitPadding: 1.08,
+  layout: {
+    mode: 'anchored',
+    slots: [
+      { centerX: 0.5, centerY: 0.45, width: 0.2, height: 0.2, shape: 'ellipse' },
+      { centerX: 0.3, centerY: 0.72, width: 0.18, height: 0.16, shape: 'ellipse' },
+      { centerX: 0.7, centerY: 0.72, width: 0.18, height: 0.16, shape: 'ellipse' }
+    ]
+  }
+};
+
+const containFrame = {
+  faceAnchor: { centerX: 0.5, centerY: 0.46, width: 0.64, height: 0.23 },
+  maskAnchors: [],
+  fitPadding: 1.08,
+  layout: {
+    mode: 'contain',
+    slots: [
+      { centerX: 0.5, centerY: 0.46, width: 0.64, height: 0.23, shape: 'rect' }
+    ]
   }
 };
 
@@ -109,6 +156,33 @@ test('normalizes an invalid mask scale before applying edge cleanup', () => {
       ['ellipse', 336, 192, 25.5, 25.5, 0, 0, Math.PI * 2]
     ]
   );
+});
+
+test('erases a rectangular placeholder with the same edge cleanup', () => {
+  const context = makeContext();
+  const canvas = { width: 0, height: 0, getContext: () => context };
+  const frameImage = { naturalWidth: 200, naturalHeight: 400 };
+
+  prepareFrameImage(
+    frameImage,
+    {
+      maskAnchors: [{
+        centerX: 0.5,
+        centerY: 0.5,
+        width: 0.4,
+        height: 0.25,
+        shape: 'rect'
+      }]
+    },
+    { createCanvas: () => canvas }
+  );
+
+  assert.deepEqual(context.calls, [
+    ['drawImage', frameImage, 0, 0, 200, 400],
+    ['beginPath'],
+    ['rect', 58.5, 148.5, 83, 103],
+    ['fill', 'destination-out']
+  ]);
 });
 
 test('draws one aspect-preserving transformed frame for every placement', () => {
@@ -296,5 +370,162 @@ test('falls back to per-face drawing when paired metadata is invalid', () => {
   assert.deepEqual(
     context.calls.filter(call => call[0] === 'rotate'),
     [['rotate', 0.4], ['rotate', -0.2]]
+  );
+});
+
+test('draws one anchored frame and only the representative portrait for one face', () => {
+  const context = makeContext();
+  const prepared = { width: 480, height: 480 };
+  const placement = {
+    centerX: 260,
+    centerY: 300,
+    width: 100,
+    height: 120,
+    rotation: 0.3
+  };
+  const factory = makeCanvasFactory();
+
+  drawFrameOverlays(
+    context,
+    prepared,
+    anchoredFrame,
+    [placement],
+    1,
+    { createCanvas: factory.createCanvas }
+  );
+
+  const frameDraws = context.calls.filter(
+    call => call[0] === 'drawImage' && call[1] === prepared
+  );
+  const portraitDraws = factory.entries[1]?.context.calls.filter(
+    call => call[0] === 'drawImage'
+  ) ?? [];
+  assert.equal(factory.entries.length, 2);
+  assert.equal(frameDraws.length, 1);
+  assert.equal(portraitDraws.length, 1);
+  assert.equal(context.calls.some(call => call[0] === 'rotate'), false);
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'translate'),
+    ['translate', 260, 300]
+  );
+});
+
+test('assigns remaining faces from left to right and caps them at the slot count', () => {
+  const context = makeContext();
+  const prepared = { width: 480, height: 480 };
+  const largest = { centerX: 280, centerY: 300, width: 120, height: 130, rotation: 0 };
+  const right = { centerX: 420, centerY: 290, width: 70, height: 80, rotation: 0 };
+  const left = { centerX: 140, centerY: 280, width: 75, height: 85, rotation: 0 };
+  const extra = { centerX: 500, centerY: 290, width: 60, height: 70, rotation: 0 };
+  const factory = makeCanvasFactory();
+
+  drawFrameOverlays(
+    context,
+    prepared,
+    anchoredFrame,
+    [largest, right, left, extra],
+    1,
+    { createCanvas: factory.createCanvas }
+  );
+
+  const portraitDraws = factory.entries[1]?.context.calls.filter(
+    call => call[0] === 'drawImage'
+  ) ?? [];
+  assert.equal(portraitDraws.length, 3);
+  assert.deepEqual(
+    portraitDraws.map(([, , sourceX, , sourceWidth]) => sourceX + sourceWidth / 2),
+    [largest.centerX, left.centerX, right.centerX]
+  );
+  assert.equal(
+    context.calls.filter(call => call[0] === 'drawImage' && call[1] === prepared).length,
+    1
+  );
+});
+
+test('contains the complete portrait frame and clips its face crop to a rectangle', () => {
+  const context = makeContext();
+  const prepared = { width: 1080, height: 1920 };
+  const placement = {
+    centerX: 200,
+    centerY: 260,
+    width: 100,
+    height: 120,
+    rotation: 0.2
+  };
+  const factory = makeCanvasFactory();
+
+  drawFrameOverlays(
+    context,
+    prepared,
+    containFrame,
+    [placement],
+    0.8,
+    { createCanvas: factory.createCanvas }
+  );
+
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'translate'),
+    ['translate', 300, 375]
+  );
+  assert.deepEqual(
+    context.calls.find(call => call[0] === 'scale'),
+    ['scale', 0.390625, 0.390625]
+  );
+  const portraitContext = factory.entries[1]?.context;
+  assert.equal(portraitContext.calls.some(call => call[0] === 'rect'), true);
+  assert.equal(portraitContext.calls.some(call => call[0] === 'clip'), true);
+  const crop = portraitContext.calls.find(call => call[0] === 'drawImage');
+  assert.equal(crop[4] / crop[5], (0.64 * 1080) / (0.23 * 1920));
+});
+
+test('draws a contained frame over the source even when no face is detected', () => {
+  const context = makeContext();
+  const prepared = { width: 1080, height: 1920 };
+  const factory = makeCanvasFactory();
+
+  drawFrameOverlays(
+    context,
+    prepared,
+    containFrame,
+    [],
+    1,
+    { createCanvas: factory.createCanvas }
+  );
+
+  assert.equal(
+    context.calls.filter(call => call[0] === 'drawImage' && call[1] === prepared).length,
+    1
+  );
+  assert.equal(
+    factory.entries[1]?.context.calls.filter(call => call[0] === 'drawImage').length,
+    0
+  );
+});
+
+test('falls back to standard drawing when portrait slot metadata is malformed', () => {
+  const context = makeContext();
+  const prepared = { width: 480, height: 480 };
+  const placement = {
+    centerX: 260,
+    centerY: 300,
+    width: 100,
+    height: 120,
+    rotation: 0.3
+  };
+
+  drawFrameOverlays(
+    context,
+    prepared,
+    { ...anchoredFrame, layout: { mode: 'anchored', slots: [] } },
+    [placement]
+  );
+
+  assert.deepEqual(
+    context.calls.filter(call => call[0] === 'rotate'),
+    [['rotate', 0.3]]
+  );
+  assert.equal(
+    context.calls.filter(call => call[0] === 'drawImage' && call[1] === prepared).length,
+    1
   );
 });
