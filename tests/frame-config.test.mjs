@@ -28,11 +28,26 @@ function boundsFromBox([left, top, right, bottom]) {
   };
 }
 
+const NEW_FRAME_BOXES = [
+  [38, [49, 94, 166, 162], [225, 270]],
+  [39, [46, 116, 141, 173], [206, 274]],
+  [40, [81, 126, 196, 196], [263, 279]],
+  [41, [72, 100, 177, 178], [256, 278]],
+  [42, [66, 90, 163, 156], [242, 276]],
+  [43, [69, 92, 174, 157], [249, 287]],
+  [44, [84, 141, 195, 219], [250, 337]],
+  [45, [58, 115, 154, 182], [223, 316]],
+  [46, [64, 81, 163, 149], [238, 275]],
+  [47, [88, 90, 191, 162], [273, 275]],
+  [48, [95, 109, 202, 166], [293, 282]],
+  [49, [69, 90, 175, 164], [242, 270]]
+];
+
 test('calibrates every existing frame with normalized face and mask anchors', () => {
-  assert.equal(FRAMES.length, 37);
-  assert.equal(new Set(FRAMES.map(frame => frame.id)).size, 37);
+  assert.equal(FRAMES.length, 49);
+  assert.equal(new Set(FRAMES.map(frame => frame.id)).size, 49);
   FRAMES.forEach(frame => {
-    assert.match(frame.name, /^프레임 (?:[1-9]|[12]\d|3[0-7])$/, frame.id);
+    assert.match(frame.name, /^프레임 (?:[1-9]|[1-4]\d)$/, frame.id);
     assert.match(frame.src, /^assets\/frames\/frame_\d{2}\.png$/, frame.id);
     assert.equal(validAnchor(frame.faceAnchor), true, frame.id);
     if (frame.id === 'frame-33') assert.equal(frame.maskAnchors.length, 0);
@@ -42,27 +57,45 @@ test('calibrates every existing frame with normalized face and mask anchors', ()
   });
   assert.deepEqual(
     FRAMES.map(frame => frame.src),
-    Array.from({ length: 37 }, (_, index) => `assets/frames/frame_${String(index + 1).padStart(2, '0')}.png`)
+    Array.from({ length: 49 }, (_, index) => `assets/frames/frame_${String(index + 1).padStart(2, '0')}.png`)
   );
-  assert.equal(new Set(FRAMES.map(frame => frame.src)).size, 37);
+  assert.equal(new Set(FRAMES.map(frame => frame.src)).size, 49);
 });
 
 test('registers all frame ids in numeric order', () => {
   assert.deepEqual(
     FRAMES.map(frame => frame.id),
-    Array.from({ length: 37 }, (_, index) => `frame-${index + 1}`)
+    Array.from({ length: 49 }, (_, index) => `frame-${index + 1}`)
   );
 });
 
-test('normalizes frame 33 against its portrait source dimensions', () => {
+test('marks frames 31 and 33 as fixed cover layouts', () => {
+  assert.deepEqual(
+    FRAMES.find(({ id }) => id === 'frame-31').layout,
+    { mode: 'cover' }
+  );
+  assert.deepEqual(
+    FRAMES.find(({ id }) => id === 'frame-33').layout,
+    { mode: 'cover' }
+  );
+});
+
+test('normalizes fixed frame 33 against its portrait source dimensions', () => {
   const frame = FRAMES.find(({ id }) => id === 'frame-33');
   const screen = anchorFromBox([198, 660, 893, 1110], [1080, 1920]);
 
   assert.deepEqual(frame.faceAnchor, screen);
   assert.deepEqual(frame.maskAnchors, []);
-  assert.deepEqual(frame.layout, {
-    mode: 'contain',
-    slots: [{ ...screen, shape: 'rect' }]
+  assert.deepEqual(frame.layout, { mode: 'cover' });
+});
+
+test('normalizes frames 38 through 49 against native dimensions', () => {
+  NEW_FRAME_BOXES.forEach(([number, box, size]) => {
+    const frame = FRAMES.find(({ id }) => id === `frame-${number}`);
+    assert.ok(frame, `frame-${number}`);
+    assert.deepEqual(frame.faceAnchor, anchorFromBox(box, size));
+    assert.deepEqual(frame.maskAnchors, [anchorFromBox(box, size)]);
+    assert.equal(frame.layout, undefined);
   });
 });
 
